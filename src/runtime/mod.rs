@@ -12,6 +12,7 @@ pub mod executor;
 pub(crate) mod http;
 pub(crate) mod interpolate;
 pub mod matcher;
+pub mod port_cache;
 pub mod report;
 pub(crate) mod response;
 pub mod spec;
@@ -25,5 +26,6 @@ pub use binary::{
 pub use bytecode::BytecodeProgram;
 pub use error::RuntimeError;
 pub use executor::{ExecutionResult, Executor, ExecutorConfig};
+pub use port_cache::{PortCache, PortCheck};
 pub use report::{Finding, Report};
 pub use spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec, SocketProbeSpec};

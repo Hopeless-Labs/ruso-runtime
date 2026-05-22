@@ -23,6 +23,7 @@ pub use opcode::{BytecodeProgram, Opcode, Pc, MAGIC, VERSION};
 pub use runtime::duration::parse_duration;
 pub use runtime::{
     BytecodeError, CheckMetadata, ExecutionResult, Executor, ExecutorConfig, Finding, HttpRequestSpec,
-    ProbeKind, ProgramSpec, Report, RuntimeError, SocketProbeSpec, bytes_to_hex, bytes_to_hex_dump,
+    PortCache, PortCheck, ProbeKind, ProgramSpec, Report, RuntimeError, SocketProbeSpec,
+    bytes_to_hex, bytes_to_hex_dump,
     decode_bytecode, disasm, encode_bytecode, format_human, hex_to_bytes, load_bytecode_input,
 };

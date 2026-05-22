@@ -21,6 +21,7 @@ use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
 use crate::runtime::interpolate::interpolate;
 use crate::runtime::report::Report;
 use crate::runtime::response::ProbeResponse;
+use crate::runtime::port_cache::{PortCache, PortCheck};
 use crate::runtime::spec::ProbeKind;
 use crate::contract::{EvidenceKind, ExtractSource};
 
@@ -56,6 +57,11 @@ pub struct ExecutionResult {
     pub success: bool,
     /// True when `finalize_finding()` produced a finding (metadata + matchers passed).
     pub detected: bool,
+    /// Check did not run because a required socket port was closed (see `skip_reason`).
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
+    /// Port probes performed before execution (empty for HTTP-only checks).
+    pub port_checks: Vec<PortCheck>,
     pub report: Report,
     pub variables: HashMap<String, String>,
     pub metadata: crate::runtime::spec::CheckMetadata,
@@ -90,6 +96,23 @@ impl Executor {
     }
 
     async fn run_bytecode(&self) -> Result<ExecutionResult, RuntimeError> {
+        let cache = PortCache::global();
+        let (port_checks, closed) = cache
+            .check_for_run(&self.program.spec, &self.config.base_url)
+            .await;
+        if let Some((host, port)) = closed {
+            return Ok(ExecutionResult {
+                success: true,
+                detected: false,
+                skipped: true,
+                skip_reason: Some(format!("port {host}:{port} closed")),
+                port_checks,
+                report: Report::default(),
+                variables: HashMap::new(),
+                metadata: self.program.spec.metadata.clone(),
+            });
+        }
+
         let mut context = Context::from_spec(&self.program.spec);
         let mut pc: usize = 0;
 
@@ -227,6 +250,9 @@ impl Executor {
         Ok(ExecutionResult {
             success: !context.failed,
             detected: !context.report.findings.is_empty(),
+            skipped: false,
+            skip_reason: None,
+            port_checks,
             report: context.report,
             variables: context.variables,
             metadata: context.metadata,

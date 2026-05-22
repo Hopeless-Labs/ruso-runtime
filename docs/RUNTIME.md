@@ -26,6 +26,18 @@ let result = executor.run().await?;
 | `variables` | Final variable map |
 | `metadata` | Check metadata from spec |
 
+## Port reachability cache
+
+Before the VM runs, `Executor::run` probes every TCP port required by socket probes in the program spec (`tcp`, `udp`, wire-mode `dns`). Results live in a process-wide cache for **30 seconds** (`PortCache::global()`).
+
+If any required port is closed (live probe or cache hit), **only that script run** is skipped:
+
+- `ExecutionResult.skipped = true`
+- `ExecutionResult.skip_reason` — e.g. `port example.com:443 closed`
+- `ExecutionResult.port_checks` — per-endpoint open/closed snapshot
+
+Other scripts in the same `ruso scan` continue. Scripts that share the same closed `host:port` within 30s are skipped without reconnecting. Endpoints come from socket probes and from `--target` (`https://host` → port 443) when the check uses HTTP.
+
 ## ExecutorConfig
 
 | Field | Default | Role |
