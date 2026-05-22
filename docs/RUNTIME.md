@@ -10,7 +10,7 @@ use ruso_runtime::{Executor, ExecutorConfig, BytecodeProgram};
 // From compiler
 let executor = Executor::from_bytecode(config, program)?;
 
-// From bytes (RUSO v2)
+// From bytes (RUSO v1)
 let executor = Executor::from_bytes(config, &bytes)?;
 
 let result = executor.run().await?;

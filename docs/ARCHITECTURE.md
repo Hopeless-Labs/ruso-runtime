@@ -73,7 +73,7 @@ Key modules:
 | `contract.rs` | Matchers, severity, HTTP method, evidence |
 | `runtime/spec.rs` | `HttpRequestSpec`, `SocketProbeSpec`, `ProbeKind` |
 | `runtime/bytecode.rs` | `Instr` enum |
-| `runtime/binary.rs` | Wire encode/decode v2 |
+| `runtime/binary.rs` | Wire encode/decode v1 |
 | `runtime/executor.rs` | VM main loop |
 | `runtime/http.rs` | HTTP client requests |
 | `runtime/session.rs` | TCP/TLS connect, multi-read, UDP |

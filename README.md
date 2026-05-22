@@ -11,7 +11,7 @@ Full developer docs are in **[`docs/`](docs/README.md)**:
 | Doc | Topic |
 |-----|--------|
 | [Architecture](docs/ARCHITECTURE.md) | System design, probe table, three repos |
-| [Bytecode v2](docs/BYTECODE.md) | Wire format, pools, opcodes |
+| [Bytecode v1](docs/BYTECODE.md) | Wire format, pools, opcodes |
 | [Runtime](docs/RUNTIME.md) | Executor, HTTP/DNS/TCP/UDP, TLS, sessions |
 | [Extending](docs/EXTENDING.md) | Adding options, opcodes, matchers |
 
@@ -46,7 +46,7 @@ Compile `.ruso` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ru
 ## Bytecode
 
 - Magic: `b"RUSO"`
-- Version: **`2`** (`ruso_runtime::VERSION`)
+- Version: **`1`** (`ruso_runtime::VERSION`)
 
 ## License
 

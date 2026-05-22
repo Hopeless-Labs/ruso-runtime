@@ -13,7 +13,7 @@ use crate::contract::{
 };
 
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 1;
 
 #[derive(Debug, Error)]
 pub enum BytecodeError {

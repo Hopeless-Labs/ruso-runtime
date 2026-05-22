@@ -1,4 +1,4 @@
-# Bytecode and opcodes (v2)
+# Bytecode and opcodes (v1)
 
 Compiled output is a `BytecodeProgram` defined in `ruso-runtime/src/runtime/bytecode.rs`. The on-disk / on-wire format is implemented in `runtime/binary.rs`.
 
@@ -6,7 +6,7 @@ Constants:
 
 ```rust
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 1;
 ```
 
 ## File layout
@@ -36,7 +36,7 @@ CLI `compile` emits hex; `exec` accepts hex or `@file.bc`.
 | `2` | `Tcp` | `SocketProbeSpec` |
 | `3` | `Udp` | `SocketProbeSpec` |
 
-### SocketProbeSpec (v2)
+### SocketProbeSpec
 
 Binary order:
 
@@ -47,8 +47,6 @@ Binary order:
 5. `session` — `u8` (0/1)  
 6. `read_max` — `u32`  
 7. `read_idle_ms` — `u32`  
-
-v1 bytecode only had host/port/payload — **not compatible** with v2.
 
 ## Instruction set
 
@@ -123,7 +121,7 @@ let executor = Executor::from_bytecode(config, program)?;
 let result = executor.run().await?;
 ```
 
-Compilers **must** target `VERSION` 2. Bump `VERSION` and document migration when changing probe or `Send` encoding.
+Compilers **must** target `VERSION` 1. Bump `VERSION` and document migration when changing probe or `Send` encoding.
 
 ## Design note: why not more opcodes?
 

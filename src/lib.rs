@@ -6,7 +6,7 @@
 //! # Developer documentation
 //!
 //! - [Architecture](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/ARCHITECTURE.md)
-//! - [Bytecode v2](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/BYTECODE.md)
+//! - [Bytecode v1](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/BYTECODE.md)
 //! - [Runtime](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/RUNTIME.md)
 //! - [Extending](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/EXTENDING.md)
 

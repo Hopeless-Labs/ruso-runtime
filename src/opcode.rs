@@ -1,4 +1,4 @@
-//! Opcode and bytecode wire-format contract (version 2).
+//! Opcode and bytecode wire-format contract (version 1).
 //!
 //! # File layout (`RUSO` + version byte)
 //!
