@@ -1,5 +1,7 @@
 # ruso-runtime
 
+> **Development status:** This project is under active development. APIs, bytecode format, and runtime behavior may change without notice. Not recommended for production use yet.
+
 Bytecode VM and network runtime for Ruso vulnerability checks.
 
 ## Documentation
