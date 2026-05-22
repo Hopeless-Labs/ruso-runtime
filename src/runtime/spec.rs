@@ -90,6 +90,9 @@ pub struct CheckMetadata {
     pub cve: Vec<String>,
     pub cwe: Vec<String>,
     pub references: Vec<String>,
+    pub cvss: Vec<String>,
+    pub cvss_score: Vec<String>,
+    pub mitigation: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

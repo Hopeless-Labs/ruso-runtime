@@ -11,6 +11,9 @@ pub struct Finding {
     pub cve: Vec<String>,
     pub cwe: Vec<String>,
     pub references: Vec<String>,
+    pub cvss: Vec<String>,
+    pub cvss_score: Vec<String>,
+    pub mitigation: Vec<String>,
     pub evidence: Vec<String>,
 }
 
@@ -30,6 +33,9 @@ impl Finding {
             cve: metadata.cve.clone(),
             cwe: metadata.cwe.clone(),
             references: metadata.references.clone(),
+            cvss: metadata.cvss.clone(),
+            cvss_score: metadata.cvss_score.clone(),
+            mitigation: metadata.mitigation.clone(),
             evidence,
         })
     }

@@ -27,7 +27,7 @@ New protocol family unrelated to HTTP/socket bytes?
 
 Use hex payload for binary protocols; `session` + `repeat` for multi-step dialogs.
 
-Optional `cve`, `cwe`, and `references` lines (repeatable) attach advisory IDs and URLs to findings and CLI/JSON reports.
+Optional `cve`, `cwe`, `references`, `cvss`, `cvss_score`, and `mitigation` lines (repeatable) attach advisory IDs, CVSS vectors/scores, remediation text, and URLs to findings and CLI/JSON reports.
 
 ## Adding a metadata field
 

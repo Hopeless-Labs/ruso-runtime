@@ -286,6 +286,9 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     write_strings(w, &metadata.cve);
     write_strings(w, &metadata.cwe);
     write_strings(w, &metadata.references);
+    write_strings(w, &metadata.cvss);
+    write_strings(w, &metadata.cvss_score);
+    write_strings(w, &metadata.mitigation);
 }
 
 fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
@@ -303,6 +306,9 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
         cve: read_strings(r)?,
         cwe: read_strings(r)?,
         references: read_strings(r)?,
+        cvss: read_strings(r)?,
+        cvss_score: read_strings(r)?,
+        mitigation: read_strings(r)?,
     })
 }
 

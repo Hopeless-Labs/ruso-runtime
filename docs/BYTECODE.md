@@ -105,8 +105,11 @@ Written in order after the header (`MAGIC` + `VERSION`):
 | `cve` | `u32` count + strings |
 | `cwe` | `u32` count + strings |
 | `references` | `u32` count + strings |
+| `cvss` | `u32` count + strings (vector) |
+| `cvss_score` | `u32` count + strings (numeric score) |
+| `mitigation` | `u32` count + strings |
 
-Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable `cve` / `cwe` / `references` lines in `.ruso` append to these lists at compile time.
+Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable metadata lines in `.ruso` append to these lists at compile time.
 
 ## Pools and IDs
 

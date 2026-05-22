@@ -96,6 +96,15 @@ fn format_metadata(
     for reference in &metadata.references {
         writeln!(out, ";;   references: {reference:?}").ok();
     }
+    for cvss in &metadata.cvss {
+        writeln!(out, ";;   cvss: {cvss:?}").ok();
+    }
+    for score in &metadata.cvss_score {
+        writeln!(out, ";;   cvss_score: {score:?}").ok();
+    }
+    for mitigation in &metadata.mitigation {
+        writeln!(out, ";;   mitigation: {mitigation:?}").ok();
+    }
 }
 
 fn format_probe_kind(kind: &ProbeKind) -> String {
