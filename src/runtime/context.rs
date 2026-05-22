@@ -47,13 +47,6 @@ impl Context {
         self.responses.insert(name.into(), response);
     }
 
-    pub fn append_socket_data(&mut self, name: &str, chunk: &str) {
-        let Some(ProbeResponse::Socket(sock)) = self.responses.get_mut(name) else {
-            return;
-        };
-        sock.data.push_str(chunk);
-    }
-
     pub fn alias_response(&mut self, from: &str, alias: impl Into<String>) {
         if let Some(response) = self.responses.get(from).cloned() {
             self.responses.insert(alias.into(), response);

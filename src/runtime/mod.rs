@@ -23,7 +23,6 @@ pub use binary::{
     BytecodeError, bytes_to_hex, bytes_to_hex_dump, decode as decode_bytecode,
     encode as encode_bytecode, hex_to_bytes, load_bytecode_input,
 };
-pub use bytecode::BytecodeProgram;
 pub use error::RuntimeError;
 pub use executor::{ExecutionResult, Executor, ExecutorConfig};
 pub use port_cache::{PortCache, PortCheck};

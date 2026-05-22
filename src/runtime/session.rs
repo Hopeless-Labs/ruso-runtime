@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rustls::ClientConfig;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
