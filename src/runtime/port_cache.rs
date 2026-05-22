@@ -76,7 +76,7 @@ impl PortCache {
 
         let has_http = spec.probes.values().any(|k| matches!(k, ProbeKind::Http(_)));
         if has_http {
-            if let Some((host, port)) = host_port_from_base_url(base_url) {
+            if let Some((host, port)) = scan_target_host_port(base_url) {
                 out.push((host, port));
             }
         }
@@ -137,7 +137,8 @@ impl PortCache {
     }
 }
 
-fn host_port_from_base_url(base_url: &str) -> Option<(String, u16)> {
+/// Host and port from CLI `--target` / executor `base_url` (for `{{scan_host}}` / `{{scan_port}}`).
+pub fn scan_target_host_port(base_url: &str) -> Option<(String, u16)> {
     let url = Url::parse(base_url).ok()?;
     let host = url.host_str()?.to_string();
     let port = url

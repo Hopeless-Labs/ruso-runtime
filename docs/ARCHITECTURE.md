@@ -179,7 +179,7 @@ A finding is emitted when:
 1. Match chain stayed true (`context.matched`), and
 2. `finalize_finding()` runs at end of bytecode (metadata name/severity, optional advisory fields including `cve` / `cwe` / `references` / `cvss` / `cvss_score` / `mitigation`, plus evidence).
 
-Flow instructions: `stop`, `exit` (halt VM), `fail` (error), `continue`, `break` (exit innermost `repeat`).
+Flow instructions: `stop` (halt, no finding), `exit` (halt, finalize finding), `fail` (error), `continue` (no-op), `break` (exit innermost `repeat`).
 
 ## What Ruso is not (yet)
 

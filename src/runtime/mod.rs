@@ -25,6 +25,6 @@ pub use binary::{
 };
 pub use error::RuntimeError;
 pub use executor::{ExecutionResult, Executor, ExecutorConfig};
-pub use port_cache::{PortCache, PortCheck};
+pub use port_cache::{PortCache, PortCheck, scan_target_host_port};
 pub use report::{Finding, Report};
 pub use spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec, SocketProbeSpec};

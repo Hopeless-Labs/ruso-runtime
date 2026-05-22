@@ -23,6 +23,8 @@ pub struct Context {
     pub retry_delay: Option<std::time::Duration>,
     pub failed: bool,
     pub matched: bool,
+    /// When false, `stop` was hit — do not emit a finding even if matchers passed.
+    pub emit_finding: bool,
     pub loop_stack: Vec<LoopFrame>,
 }
 
@@ -31,6 +33,7 @@ impl Context {
         Self {
             metadata: spec.metadata.clone(),
             matched: true,
+            emit_finding: true,
             ..Default::default()
         }
     }
@@ -58,7 +61,7 @@ impl Context {
     }
 
     pub fn finalize_finding(&mut self) {
-        if !self.matched {
+        if !self.matched || !self.emit_finding {
             return;
         }
         let evidence = std::mem::take(&mut self.evidence);
@@ -92,6 +95,16 @@ mod tests {
         let mut ctx = Context::default();
         ctx.matched = false;
         ctx.metadata.name = Some("Should not emit".into());
+        ctx.finalize_finding();
+        assert!(ctx.report.findings.is_empty());
+    }
+
+    #[test]
+    fn finalize_skips_after_stop() {
+        let mut ctx = Context::default();
+        ctx.matched = true;
+        ctx.emit_finding = false;
+        ctx.metadata.name = Some("Stopped".into());
         ctx.finalize_finding();
         assert!(ctx.report.findings.is_empty());
     }

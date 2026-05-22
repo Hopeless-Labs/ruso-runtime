@@ -21,7 +21,7 @@ use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
 use crate::runtime::interpolate::interpolate;
 use crate::runtime::report::Report;
 use crate::runtime::response::ProbeResponse;
-use crate::runtime::port_cache::{PortCache, PortCheck};
+use crate::runtime::port_cache::{PortCache, PortCheck, scan_target_host_port};
 use crate::runtime::spec::ProbeKind;
 use crate::contract::{EvidenceKind, ExtractSource};
 
@@ -128,6 +128,7 @@ impl Executor {
         }
 
         let mut context = Context::from_spec(&self.program.spec);
+        inject_scan_target_variables(&mut context, &self.config.base_url);
         let mut pc: usize = 0;
 
         while pc < self.program.code.len() {
@@ -241,6 +242,7 @@ impl Executor {
                 }
                 Instr::Stop => {
                     tracing::warn!("stop");
+                    context.emit_finding = false;
                     break;
                 }
                 Instr::Exit => {
@@ -543,6 +545,9 @@ impl Executor {
     }
 
     fn require_assert(&self, matcher_idx: usize, context: &Context) -> Result<(), RuntimeError> {
+        if !context.matched {
+            return Ok(());
+        }
         if self.matches_idx(matcher_idx, context)? {
             return Ok(());
         }
@@ -615,37 +620,47 @@ impl Executor {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
-                    name: target.clone(),
-                })?;
+                let http = response.as_http().map_err(|_| RuntimeError::Other(format!(
+                    "evidence {target}.body requires an http probe; use evidence {target}.response or evidence {target} regex for socket/dns"
+                )))?;
                 Ok(crate::util::truncate_str(&http.body, 500))
             }
-            EvidenceKind::Regex(pattern) => {
-                for response in context.responses.values() {
-                    let haystack = match response {
-                        ProbeResponse::Http(http) => http.body.as_str(),
-                        ProbeResponse::DnsResolve(dns) => {
-                            if let Some(found) = extract_regex(
-                                &dns.answers.join(" "),
-                                pattern,
-                            )
-                            .ok()
-                            {
-                                return Ok(found);
-                            }
-                            continue;
-                        }
-                        ProbeResponse::Socket(sock) => sock.data.as_str(),
-                    };
-                    if let Some(found) = extract_regex(haystack, pattern).ok() {
-                        return Ok(found);
-                    }
-                }
-                Err(RuntimeError::Other(format!(
-                    "evidence regex did not match: {pattern}"
-                )))
+            EvidenceKind::ResponseRef(target) => {
+                let response = context
+                    .response(target)
+                    .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
+                Ok(crate::util::truncate_str(&evidence_haystack(&response), 500))
+            }
+            EvidenceKind::Regex { target, pattern } => {
+                let response = context
+                    .response(target)
+                    .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
+                let haystack = evidence_haystack(&response);
+                extract_regex(&haystack, pattern).map_err(|_| {
+                    RuntimeError::Other(format!(
+                        "evidence regex on {target} did not match: {pattern}"
+                    ))
+                })
             }
         }
+    }
+}
+
+fn inject_scan_target_variables(context: &mut Context, base_url: &str) {
+    if let Some((host, port)) = scan_target_host_port(base_url) {
+        context.set_variable("scan_host", host);
+        context.set_variable("scan_port", port.to_string());
+    }
+    if !base_url.is_empty() {
+        context.set_variable("scan_url", base_url.to_string());
+    }
+}
+
+fn evidence_haystack(response: &ProbeResponse) -> String {
+    match response {
+        ProbeResponse::Http(http) => http.body.clone(),
+        ProbeResponse::DnsResolve(dns) => dns.answers.join(" "),
+        ProbeResponse::Socket(sock) => sock.data.clone(),
     }
 }
 

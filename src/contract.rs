@@ -110,8 +110,14 @@ pub enum ExtractSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvidenceKind {
+    /// HTTP probe response body (truncated).
     BodyRef(String),
-    Regex(String),
+    /// Probe response text: HTTP body, DNS answers, or socket data (truncated).
+    ResponseRef(String),
+    Regex {
+        target: String,
+        pattern: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

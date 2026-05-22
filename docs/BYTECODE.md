@@ -120,6 +120,14 @@ All `u32` IDs index into compile-time pools in `BytecodeProgram`:
 - Matchers — full `QualifiedMatch` structs  
 - Extracts / Evidence — parallel structures  
 
+Evidence pool entries (`EvidenceKind`):
+
+| Tag | Form | Wire |
+|-----|------|------|
+| 0 | `body <probe>` | probe name string |
+| 1 | `regex <probe> <pattern>` | probe name + pattern string |
+| 2 | `response <probe>` | probe name string |
+
 The executor resolves IDs at runtime via `program.strings[id]`, etc.
 
 ## Disassembly

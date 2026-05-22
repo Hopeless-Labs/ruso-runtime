@@ -36,7 +36,7 @@ When a check matches, `finalize_finding()` builds one `Finding` from metadata pl
 | `description`, `impact`, `author` | Optional metadata strings |
 | `severity` | Metadata `severity`, default `info` |
 | `cve`, `cwe`, `references`, `cvss`, `cvss_score`, `mitigation` | Repeatable DSL lines → `Vec<String>` |
-| `evidence` | `evidence` instructions during the run |
+| `evidence` | `evidence <probe>.body` or `evidence <probe> regex '…'` on that probe only |
 
 ## Port reachability cache
 

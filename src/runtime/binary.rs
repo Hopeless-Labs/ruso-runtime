@@ -831,8 +831,13 @@ fn write_evidence_kind(w: &mut Writer, k: &EvidenceKind) {
             w.u8(0);
             w.str(target);
         }
-        EvidenceKind::Regex(pattern) => {
+        EvidenceKind::ResponseRef(target) => {
+            w.u8(2);
+            w.str(target);
+        }
+        EvidenceKind::Regex { target, pattern } => {
             w.u8(1);
+            w.str(target);
             w.str(pattern);
         }
     }
@@ -841,7 +846,11 @@ fn write_evidence_kind(w: &mut Writer, k: &EvidenceKind) {
 fn read_evidence_kind(r: &mut Reader<'_>) -> Result<EvidenceKind, BytecodeError> {
     Ok(match r.u8()? {
         0 => EvidenceKind::BodyRef(r.str()?),
-        1 => EvidenceKind::Regex(r.str()?),
+        1 => EvidenceKind::Regex {
+            target: r.str()?,
+            pattern: r.str()?,
+        },
+        2 => EvidenceKind::ResponseRef(r.str()?),
         _ => return Err(BytecodeError::Corrupt("evidence")),
     })
 }

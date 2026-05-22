@@ -212,7 +212,8 @@ fn format_extract(source: &ExtractSource) -> String {
 fn format_evidence(kind: &EvidenceKind) -> String {
     match kind {
         EvidenceKind::BodyRef(target) => format!("body {target}"),
-        EvidenceKind::Regex(pattern) => format!("regex {pattern:?}"),
+        EvidenceKind::ResponseRef(target) => format!("response {target}"),
+        EvidenceKind::Regex { target, pattern } => format!("regex {target} {pattern:?}"),
     }
 }
 
