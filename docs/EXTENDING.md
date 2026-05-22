@@ -42,7 +42,7 @@ Example: `connect_timeout 5s`.
 | 7 | `session.rs` / `executor.rs` — use value on connect |
 | 8 | `disasm.rs` — show in probe dump |
 | 9 | `docs/DSL_REFERENCE.md` — document |
-| 10 | Bump `VERSION` to 2 if layout changes |
+| 10 | Bump `VERSION` if layout changes |
 
 Backward compatibility: old bytecode cannot read new fields—bump version and recompile all stored `.bc` files.
 

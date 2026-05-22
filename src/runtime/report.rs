@@ -8,6 +8,9 @@ pub struct Finding {
     pub impact: Option<String>,
     pub severity: Severity,
     pub author: Option<String>,
+    pub cve: Vec<String>,
+    pub cwe: Vec<String>,
+    pub references: Vec<String>,
     pub evidence: Vec<String>,
 }
 
@@ -24,6 +27,9 @@ impl Finding {
             impact: metadata.impact.clone(),
             severity: metadata.severity.clone().unwrap_or(Severity::Info),
             author: metadata.author.clone(),
+            cve: metadata.cve.clone(),
+            cwe: metadata.cwe.clone(),
+            references: metadata.references.clone(),
             evidence,
         })
     }

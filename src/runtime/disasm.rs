@@ -87,6 +87,15 @@ fn format_metadata(
     if let Some(title) = &metadata.report_title {
         writeln!(out, ";;   report: {title:?}").ok();
     }
+    for cve in &metadata.cve {
+        writeln!(out, ";;   cve: {cve:?}").ok();
+    }
+    for cwe in &metadata.cwe {
+        writeln!(out, ";;   cwe: {cwe:?}").ok();
+    }
+    for reference in &metadata.references {
+        writeln!(out, ";;   references: {reference:?}").ok();
+    }
 }
 
 fn format_probe_kind(kind: &ProbeKind) -> String {

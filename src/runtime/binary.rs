@@ -283,6 +283,9 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     }
     w.opt_str(&metadata.author);
     w.opt_str(&metadata.report_title);
+    write_strings(w, &metadata.cve);
+    write_strings(w, &metadata.cwe);
+    write_strings(w, &metadata.references);
 }
 
 fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
@@ -297,6 +300,9 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
         },
         author: r.opt_str()?,
         report_title: r.opt_str()?,
+        cve: read_strings(r)?,
+        cwe: read_strings(r)?,
+        references: read_strings(r)?,
     })
 }
 

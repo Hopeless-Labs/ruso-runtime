@@ -16,7 +16,7 @@ Sections are written in order:
 | # | Section | Content |
 |---|---------|---------|
 | 1 | Header | `MAGIC` + `VERSION` |
-| 2 | Metadata | name, description, impact, severity, author, report_title |
+| 2 | Metadata | name, description, impact, severity, author, report_title, cve[], cwe[], references[] |
 | 3 | Probe table | count + `(name, ProbeKind)*` |
 | 4 | String pool | UTF-8 strings (identifiers, durations as text, …) |
 | 5 | Payload pool | raw byte blobs for `Send` overrides |
@@ -121,7 +121,7 @@ let executor = Executor::from_bytecode(config, program)?;
 let result = executor.run().await?;
 ```
 
-Compilers **must** target `VERSION` 1. Bump `VERSION` and document migration when changing probe or `Send` encoding.
+Compilers **must** target `VERSION` 1. Recompile stored `.bc` files after metadata layout changes. Bump `VERSION` when changing probe or `Send` encoding.
 
 ## Design note: why not more opcodes?
 

@@ -87,6 +87,9 @@ pub struct CheckMetadata {
     pub severity: Option<crate::contract::Severity>,
     pub author: Option<String>,
     pub report_title: Option<String>,
+    pub cve: Vec<String>,
+    pub cwe: Vec<String>,
+    pub references: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
