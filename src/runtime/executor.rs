@@ -684,6 +684,7 @@ mod tests {
             },
             code: vec![],
             strings: vec![],
+            payloads: vec![],
             matchers: vec![],
             extracts: vec![],
             evidence: vec![],
@@ -699,6 +700,7 @@ mod tests {
             },
             code: vec![Instr::Fail],
             strings: vec![],
+            payloads: vec![],
             matchers: vec![],
             extracts: vec![],
             evidence: vec![],
@@ -720,6 +722,7 @@ mod tests {
             },
             code: vec![Instr::Match(0)],
             strings: vec![],
+            payloads: vec![],
             matchers: vec![QualifiedMatch {
                 field: QualifiedField {
                     target: "home".into(),
