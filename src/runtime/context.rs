@@ -12,7 +12,7 @@ pub struct LoopFrame {
     pub end_pc: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Context {
     pub variables: HashMap<String, String>,
     pub responses: HashMap<String, ProbeResponse>,
@@ -28,12 +28,28 @@ pub struct Context {
     pub loop_stack: Vec<LoopFrame>,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            variables: HashMap::new(),
+            responses: HashMap::new(),
+            sessions: HashMap::new(),
+            metadata: CheckMetadata::default(),
+            report: Report::default(),
+            evidence: Vec::new(),
+            retry_delay: None,
+            failed: false,
+            matched: true,
+            emit_finding: true,
+            loop_stack: Vec::new(),
+        }
+    }
+}
+
 impl Context {
     pub fn from_spec(spec: &ProgramSpec) -> Self {
         Self {
             metadata: spec.metadata.clone(),
-            matched: true,
-            emit_finding: true,
             ..Default::default()
         }
     }
