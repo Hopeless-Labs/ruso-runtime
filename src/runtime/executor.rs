@@ -1,0 +1,762 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use regex::Regex;
+use reqwest::Client;
+
+use crate::runtime::binary;
+use crate::runtime::bytecode::{BytecodeProgram, Instr};
+use crate::runtime::context::Context;
+use crate::runtime::dns::{resolve_host, run_dns_probe};
+use crate::runtime::response::SocketResponse;
+use crate::runtime::session::{
+    open_tcp_session, open_udp_session, read_opts_from_spec, ProbeSession,
+};
+use crate::runtime::socket::{exchange_tcp, exchange_udp, tcp_session_exchange, udp_session_exchange};
+use crate::runtime::spec::SocketProbeSpec;
+use crate::runtime::duration::parse_duration;
+use crate::runtime::error::RuntimeError;
+use crate::runtime::http::{build_client, execute_http};
+use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
+use crate::runtime::interpolate::interpolate;
+use crate::runtime::report::Report;
+use crate::runtime::response::ProbeResponse;
+use crate::runtime::spec::ProbeKind;
+use crate::contract::{EvidenceKind, ExtractSource};
+
+#[derive(Debug, Clone)]
+pub struct ExecutorConfig {
+    pub base_url: String,
+    pub default_timeout: Duration,
+    pub follow_redirect: bool,
+    pub verify_ssl: bool,
+    pub proxy: Option<String>,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            default_timeout: Duration::from_secs(30),
+            follow_redirect: true,
+            verify_ssl: true,
+            proxy: None,
+        }
+    }
+}
+
+pub struct Executor {
+    config: ExecutorConfig,
+    program: BytecodeProgram,
+    client: Client,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionResult {
+    pub success: bool,
+    /// True when `finalize_finding()` produced a finding (metadata + matchers passed).
+    pub detected: bool,
+    pub report: Report,
+    pub variables: HashMap<String, String>,
+    pub metadata: crate::runtime::spec::CheckMetadata,
+}
+
+impl Executor {
+    pub fn from_bytes(config: ExecutorConfig, bytes: &[u8]) -> Result<Self, RuntimeError> {
+        let program = binary::decode(bytes).map_err(|err| RuntimeError::Bytecode(err))?;
+        Self::from_bytecode(config, program)
+    }
+
+    pub fn from_bytecode(config: ExecutorConfig, program: BytecodeProgram) -> Result<Self, RuntimeError> {
+        let client = build_client(
+            Some(config.default_timeout),
+            config.follow_redirect,
+            config.verify_ssl,
+            config.proxy.as_deref(),
+        )?;
+        Ok(Self {
+            config,
+            program,
+            client,
+        })
+    }
+
+    pub fn bytecode(&self) -> &BytecodeProgram {
+        &self.program
+    }
+
+    pub async fn run(&self) -> Result<ExecutionResult, RuntimeError> {
+        self.run_bytecode().await
+    }
+
+    async fn run_bytecode(&self) -> Result<ExecutionResult, RuntimeError> {
+        let mut context = Context::from_spec(&self.program.spec);
+        let mut pc: usize = 0;
+
+        while pc < self.program.code.len() {
+            match &self.program.code[pc] {
+                Instr::Set { name, value } => {
+                    let name = &self.program.strings[*name as usize];
+                    let value = &self.program.strings[*value as usize];
+                    context.set_variable(name.clone(), interpolate(value, &context.variables));
+                    pc += 1;
+                }
+                Instr::Send { probe, payload } => {
+                    let name = &self.program.strings[*probe as usize];
+                    let payload_override = payload
+                        .map(|id| self.program.payloads[id as usize].clone());
+                    tracing::trace!(probe = %name, "send");
+                    self.send_probe(name, payload_override, &mut context)
+                        .await?;
+                    pc += 1;
+                }
+                Instr::Match(matcher) => {
+                    self.apply_match(*matcher as usize, &mut context)?;
+                    pc += 1;
+                }
+                Instr::MatchAll { start, len } => {
+                    self.apply_match_all(*start as usize, *len as usize, &mut context)?;
+                    pc += 1;
+                }
+                Instr::MatchAny { start, len } => {
+                    self.apply_match_any(*start as usize, *len as usize, &mut context)?;
+                    pc += 1;
+                }
+                Instr::Assert(matcher) => {
+                    self.require_assert(*matcher as usize, &context)?;
+                    pc += 1;
+                }
+                Instr::Extract { name, source } => {
+                    if context.matched {
+                        let name = &self.program.strings[*name as usize];
+                        let source = &self.program.extracts[*source as usize];
+                        self.extract(name, source, &mut context)?;
+                    }
+                    pc += 1;
+                }
+                Instr::IfMatch { matcher, else_pc } => {
+                    if !context.matched || !self.matches_idx(*matcher as usize, &context)? {
+                        pc = *else_pc as usize;
+                    } else {
+                        pc += 1;
+                    }
+                }
+                Instr::Repeat { count, end_pc } => {
+                    context.loop_stack.push(crate::runtime::context::LoopFrame {
+                        remaining: *count,
+                        head_pc: pc + 1,
+                        end_pc: *end_pc as usize,
+                    });
+                    pc += 1;
+                }
+                Instr::LoopBack => {
+                    let frame = context
+                        .loop_stack
+                        .last_mut()
+                        .ok_or_else(|| RuntimeError::Other("loop_back outside repeat".into()))?;
+                    if frame.remaining > 1 {
+                        frame.remaining -= 1;
+                        pc = frame.head_pc;
+                    } else {
+                        let end_pc = frame.end_pc;
+                        context.loop_stack.pop();
+                        pc = end_pc;
+                    }
+                }
+                Instr::Break => {
+                    let end_pc = context
+                        .loop_stack
+                        .pop()
+                        .ok_or_else(|| RuntimeError::Other("break outside repeat".into()))?
+                        .end_pc;
+                    pc = end_pc;
+                }
+                Instr::Save { from, to } => {
+                    let from = &self.program.strings[*from as usize];
+                    let to = &self.program.strings[*to as usize];
+                    context.alias_response(from, to);
+                    pc += 1;
+                }
+                Instr::Evidence(kind) => {
+                    if !context.matched {
+                        pc += 1;
+                        continue;
+                    }
+                    let kind = &self.program.evidence[*kind as usize];
+                    let text = self.collect_evidence(kind, &context)?;
+                    context.evidence.push(text);
+                    pc += 1;
+                }
+                Instr::Retry { probe, count } => {
+                    let name = &self.program.strings[*probe as usize];
+                    self.retry_send(name, *count, &mut context).await?;
+                    pc += 1;
+                }
+                Instr::RetryDelay(value) => {
+                    let value = &self.program.strings[*value as usize];
+                    context.retry_delay = Some(parse_duration(value)?);
+                    pc += 1;
+                }
+                Instr::Sleep(value) => {
+                    let value = &self.program.strings[*value as usize];
+                    tokio::time::sleep(parse_duration(value)?).await;
+                    pc += 1;
+                }
+                Instr::Stop => {
+                    tracing::warn!("stop");
+                    break;
+                }
+                Instr::Exit => {
+                    tracing::info!("exit");
+                    break;
+                }
+                Instr::Fail => {
+                    tracing::error!("fail");
+                    context.failed = true;
+                    return Err(RuntimeError::Flow("fail".into()));
+                }
+                Instr::Continue => {
+                    pc += 1;
+                }
+            }
+        }
+
+        context.close_sessions();
+        context.finalize_finding();
+
+        Ok(ExecutionResult {
+            success: !context.failed,
+            detected: !context.report.findings.is_empty(),
+            report: context.report,
+            variables: context.variables,
+            metadata: context.metadata,
+        })
+    }
+
+    fn interpolate_socket_spec(
+        &self,
+        spec: &SocketProbeSpec,
+        context: &Context,
+    ) -> SocketProbeSpec {
+        SocketProbeSpec {
+            host: interpolate(&spec.host, &context.variables),
+            port: spec.port,
+            payload: spec.payload.as_ref().map(|bytes| {
+                if let Ok(text) = std::str::from_utf8(bytes) {
+                    interpolate(text, &context.variables).into_bytes()
+                } else {
+                    bytes.clone()
+                }
+            }),
+            tls: spec.tls,
+            session: spec.session,
+            read_max: spec.read_max,
+            read_idle_ms: spec.read_idle_ms,
+        }
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, context), fields(probe = name))]
+    async fn send_probe(
+        &self,
+        name: &str,
+        payload_override: Option<Vec<u8>>,
+        context: &mut Context,
+    ) -> Result<(), RuntimeError> {
+        let probe = self
+            .program
+            .spec
+            .probes
+            .get(name)
+            .ok_or_else(|| RuntimeError::UnknownTarget(name.to_string()))?
+            .clone();
+
+        let timeout = context
+            .retry_delay
+            .unwrap_or(self.config.default_timeout);
+
+        let response = match probe {
+            ProbeKind::Http(spec) => {
+                let http = execute_http(
+                    &self.client,
+                    &self.config.base_url,
+                    &spec,
+                    &context.variables,
+                )
+                .await?;
+                ProbeResponse::Http(http)
+            }
+            ProbeKind::Dns(spec) => {
+                let mut spec = self.interpolate_socket_spec(&spec, context);
+                if let Some(p) = payload_override {
+                    spec.payload = Some(p);
+                }
+                if spec.is_dns_resolver_mode() {
+                    ProbeResponse::DnsResolve(resolve_host(&spec.host).await?)
+                } else {
+                    ProbeResponse::Socket(run_dns_probe(&spec, timeout).await?)
+                }
+            }
+            ProbeKind::Tcp(spec) => {
+                let spec = self.interpolate_socket_spec(&spec, context);
+                let port = spec.port.ok_or_else(|| {
+                    RuntimeError::Other(format!("tcp probe requires port"))
+                })?;
+                let payload = payload_override.or(spec.payload.clone());
+                ProbeResponse::Socket(
+                    self.exchange_tcp_probe(name, &spec, port, payload.as_deref(), timeout, context)
+                        .await?,
+                )
+            }
+            ProbeKind::Udp(spec) => {
+                let spec = self.interpolate_socket_spec(&spec, context);
+                let port = spec.port.ok_or_else(|| {
+                    RuntimeError::Other(format!("udp probe requires port"))
+                })?;
+                let payload = payload_override.or(spec.payload.clone());
+                ProbeResponse::Socket(
+                    self.exchange_udp_probe(name, &spec, port, payload.as_deref(), timeout, context)
+                        .await?,
+                )
+            }
+        };
+
+        log_probe_response(name, &response);
+
+        let append_session = probe_session_enabled(name, &self.program.spec);
+        if append_session {
+            if let (ProbeResponse::Socket(chunk), Some(ProbeResponse::Socket(existing))) =
+                (&response, context.responses.get(name))
+            {
+                let mut merged = existing.clone();
+                merged.data.push_str(&chunk.data);
+                context.store_response(name, ProbeResponse::Socket(merged));
+                return Ok(());
+            }
+        }
+        context.store_response(name, response);
+        Ok(())
+    }
+
+    async fn exchange_tcp_probe(
+        &self,
+        name: &str,
+        spec: &SocketProbeSpec,
+        port: u16,
+        payload: Option<&[u8]>,
+        timeout: Duration,
+        context: &mut Context,
+    ) -> Result<SocketResponse, RuntimeError> {
+        let read = read_opts_from_spec(spec);
+        let io_timeout = Duration::from_secs(3);
+
+        if spec.session {
+            if let Some(ProbeSession::Tcp(session)) = context.sessions.get_mut(name) {
+                let data =
+                    tcp_session_exchange(session, payload, &read, io_timeout).await?;
+                return Ok(SocketResponse {
+                    host: spec.host.clone(),
+                    port,
+                    data,
+                });
+            }
+            let mut session =
+                open_tcp_session(&spec.host, port, spec.tls, self.config.verify_ssl, timeout)
+                    .await?;
+            let data = tcp_session_exchange(&mut session, payload, &read, io_timeout).await?;
+            context
+                .sessions
+                .insert(name.to_string(), ProbeSession::Tcp(session));
+            return Ok(SocketResponse {
+                host: spec.host.clone(),
+                port,
+                data,
+            });
+        }
+
+        let mut send_spec = spec.clone();
+        send_spec.payload = payload.map(|p| p.to_vec());
+        exchange_tcp(
+            &send_spec.host,
+            port,
+            &send_spec,
+            self.config.verify_ssl,
+            timeout,
+        )
+        .await
+    }
+
+    async fn exchange_udp_probe(
+        &self,
+        name: &str,
+        spec: &SocketProbeSpec,
+        port: u16,
+        payload: Option<&[u8]>,
+        timeout: Duration,
+        context: &mut Context,
+    ) -> Result<SocketResponse, RuntimeError> {
+        let read = read_opts_from_spec(spec);
+        let io_timeout = Duration::from_secs(3);
+
+        if spec.tls {
+            return Err(RuntimeError::Other("tls is not supported for udp".into()));
+        }
+
+        if spec.session {
+            if let Some(ProbeSession::Udp(socket)) = context.sessions.get(name) {
+                let data = udp_session_exchange(socket, payload, &read, io_timeout).await?;
+                return Ok(SocketResponse {
+                    host: spec.host.clone(),
+                    port,
+                    data,
+                });
+            }
+            let socket = open_udp_session(&spec.host, port, timeout).await?;
+            let data = udp_session_exchange(&socket, payload, &read, io_timeout).await?;
+            context
+                .sessions
+                .insert(name.to_string(), ProbeSession::Udp(socket));
+            return Ok(SocketResponse {
+                host: spec.host.clone(),
+                port,
+                data,
+            });
+        }
+
+        exchange_udp(&spec.host, port, payload, spec, timeout).await
+    }
+
+    async fn retry_send(
+        &self,
+        name: &str,
+        count: u32,
+        context: &mut Context,
+    ) -> Result<(), RuntimeError> {
+        let delay = context.retry_delay.unwrap_or(Duration::from_secs(1));
+        let mut last_error = None;
+
+        for attempt in 0..count {
+            if attempt > 0 {
+                tokio::time::sleep(delay).await;
+            }
+            match self.send_probe(name, None, context).await {
+                Ok(()) => return Ok(()),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            RuntimeError::Other(format!("retry send failed for {name}"))
+        }))
+    }
+
+    fn apply_match(&self, matcher_idx: usize, context: &mut Context) -> Result<(), RuntimeError> {
+        if !context.matched {
+            return Ok(());
+        }
+        let matcher = &self.program.matchers[matcher_idx];
+        if !self.matches_idx(matcher_idx, context)? {
+            tracing::trace!(target = %matcher.field.target, ?matcher.predicate, "match failed");
+            context.matched = false;
+        } else {
+            tracing::trace!(target = %matcher.field.target, ?matcher.predicate, "match ok");
+        }
+        Ok(())
+    }
+
+    fn apply_match_all(
+        &self,
+        start: usize,
+        len: usize,
+        context: &mut Context,
+    ) -> Result<(), RuntimeError> {
+        if !context.matched {
+            return Ok(());
+        }
+        let matchers = &self.program.matchers[start..start + len];
+        if !evaluate_all(matchers, &context.responses)? {
+            tracing::trace!(count = len, "match all failed");
+            context.matched = false;
+        } else {
+            tracing::trace!(count = len, "match all ok");
+        }
+        Ok(())
+    }
+
+    fn apply_match_any(
+        &self,
+        start: usize,
+        len: usize,
+        context: &mut Context,
+    ) -> Result<(), RuntimeError> {
+        if !context.matched {
+            return Ok(());
+        }
+        let matchers = &self.program.matchers[start..start + len];
+        if !evaluate_any(matchers, &context.responses)? {
+            tracing::trace!(count = len, "match any failed");
+            context.matched = false;
+        } else {
+            tracing::trace!(count = len, "match any ok");
+        }
+        Ok(())
+    }
+
+    fn require_assert(&self, matcher_idx: usize, context: &Context) -> Result<(), RuntimeError> {
+        if self.matches_idx(matcher_idx, context)? {
+            return Ok(());
+        }
+        let matcher = &self.program.matchers[matcher_idx];
+        let detail = format!("target {}", matcher.field.target);
+        Err(RuntimeError::assert_failed(matcher, detail))
+    }
+
+    fn matches_idx(&self, matcher_idx: usize, context: &Context) -> Result<bool, RuntimeError> {
+        let matcher = &self.program.matchers[matcher_idx];
+        let response = context
+            .response(&matcher.field.target)
+            .ok_or_else(|| RuntimeError::UnknownTarget(matcher.field.target.clone()))?;
+        evaluate(matcher, response)
+    }
+
+    fn extract(
+        &self,
+        name: &str,
+        source: &ExtractSource,
+        context: &mut Context,
+    ) -> Result<(), RuntimeError> {
+        let value = match source {
+            ExtractSource::Body { target, regex } => {
+                let response = context
+                    .response(target)
+                    .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
+                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
+                    name: target.clone(),
+                })?;
+                match regex {
+                    Some(pattern) => extract_regex(&http.body, pattern)?,
+                    None => http.body.clone(),
+                }
+            }
+            ExtractSource::Header { target, name: header } => {
+                let response = context
+                    .response(target)
+                    .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
+                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
+                    name: target.clone(),
+                })?;
+                http.headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(header))
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_default()
+            }
+        };
+
+        if value.is_empty() {
+            return Err(RuntimeError::ExtractFailed {
+                name: name.to_string(),
+                reason: "empty result".into(),
+            });
+        }
+
+        tracing::trace!(variable = %name, "extracted");
+        context.set_variable(name, value);
+        Ok(())
+    }
+
+    fn collect_evidence(
+        &self,
+        kind: &EvidenceKind,
+        context: &Context,
+    ) -> Result<String, RuntimeError> {
+        match kind {
+            EvidenceKind::BodyRef(target) => {
+                let response = context
+                    .response(target)
+                    .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
+                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
+                    name: target.clone(),
+                })?;
+                Ok(crate::util::truncate_str(&http.body, 500))
+            }
+            EvidenceKind::Regex(pattern) => {
+                for response in context.responses.values() {
+                    let haystack = match response {
+                        ProbeResponse::Http(http) => http.body.as_str(),
+                        ProbeResponse::DnsResolve(dns) => {
+                            if let Some(found) = extract_regex(
+                                &dns.answers.join(" "),
+                                pattern,
+                            )
+                            .ok()
+                            {
+                                return Ok(found);
+                            }
+                            continue;
+                        }
+                        ProbeResponse::Socket(sock) => sock.data.as_str(),
+                    };
+                    if let Some(found) = extract_regex(haystack, pattern).ok() {
+                        return Ok(found);
+                    }
+                }
+                Err(RuntimeError::Other(format!(
+                    "evidence regex did not match: {pattern}"
+                )))
+            }
+        }
+    }
+}
+
+fn probe_session_enabled(name: &str, spec: &crate::runtime::spec::ProgramSpec) -> bool {
+    spec.probes.get(name).is_some_and(|kind| match kind {
+        ProbeKind::Tcp(s) | ProbeKind::Udp(s) | ProbeKind::Dns(s) => s.session,
+        ProbeKind::Http(_) => false,
+    })
+}
+
+fn extract_regex(body: &str, pattern: &str) -> Result<String, RuntimeError> {
+    let regex = Regex::new(pattern)?;
+    let captures = regex
+        .captures(body)
+        .ok_or_else(|| RuntimeError::ExtractFailed {
+            name: "regex".into(),
+            reason: format!("pattern not found: {pattern}"),
+        })?;
+    let matched = captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_default();
+    if matched.is_empty() {
+        return Err(RuntimeError::ExtractFailed {
+            name: "regex".into(),
+            reason: format!("empty capture for: {pattern}"),
+        });
+    }
+    Ok(matched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{
+        CmpOp, CmpValue, FieldKind, MatchPredicate, QualifiedField, QualifiedMatch, Severity,
+    };
+    use crate::runtime::bytecode::BytecodeProgram;
+    use crate::runtime::spec::{CheckMetadata, ProgramSpec};
+
+    fn metadata_only_bytecode() -> BytecodeProgram {
+        BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata {
+                    name: Some("Metadata only".into()),
+                    severity: Some(Severity::Low),
+                    ..CheckMetadata::default()
+                },
+            },
+            code: vec![],
+            strings: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn run_fail_opcode_returns_error() {
+        let bytecode = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            code: vec![Instr::Fail],
+            strings: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let config = ExecutorConfig {
+            base_url: "http://127.0.0.1".into(),
+            ..ExecutorConfig::default()
+        };
+        let executor = Executor::from_bytecode(config, bytecode).unwrap();
+        assert!(executor.run().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn match_without_send_returns_unknown_target() {
+        let bytecode = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            code: vec![Instr::Match(0)],
+            strings: vec![],
+            matchers: vec![QualifiedMatch {
+                field: QualifiedField {
+                    target: "home".into(),
+                    kind: FieldKind::Status,
+                },
+                predicate: MatchPredicate::Compare {
+                    op: CmpOp::Eq,
+                    value: CmpValue::Number(200),
+                },
+            }],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let config = ExecutorConfig {
+            base_url: "http://127.0.0.1".into(),
+            ..ExecutorConfig::default()
+        };
+        let executor = Executor::from_bytecode(config, bytecode).unwrap();
+        let err = executor.run().await.expect_err("match without prior send");
+        assert!(matches!(err, RuntimeError::UnknownTarget(_)));
+    }
+
+    #[tokio::test]
+    async fn metadata_only_can_emit_finding_without_network() {
+        let config = ExecutorConfig {
+            base_url: "http://127.0.0.1".into(),
+            ..ExecutorConfig::default()
+        };
+        let executor = Executor::from_bytecode(config, metadata_only_bytecode()).unwrap();
+        assert!(executor.bytecode().code.is_empty());
+        let result = executor.run().await.expect("metadata run");
+        assert!(result.detected);
+        assert_eq!(result.report.findings[0].name, "Metadata only");
+    }
+}
+
+fn log_probe_response(name: &str, response: &ProbeResponse) {
+    match response {
+        ProbeResponse::Http(http) => {
+            tracing::trace!(
+                probe = name,
+                status = http.status,
+                elapsed_ms = http.elapsed.as_millis() as u64,
+                body_bytes = http.body.len(),
+                "http response"
+            );
+        }
+        ProbeResponse::DnsResolve(dns) => {
+            tracing::trace!(
+                probe = name,
+                host = %dns.host,
+                answers = dns.answers.len(),
+                "dns resolve"
+            );
+        }
+        ProbeResponse::Socket(sock) => {
+            tracing::trace!(
+                probe = name,
+                host = %sock.host,
+                port = sock.port,
+                data_bytes = sock.data.len(),
+                "socket response"
+            );
+        }
+    }
+}
