@@ -16,7 +16,7 @@ Sections are written in order:
 | # | Section | Content |
 |---|---------|---------|
 | 1 | Header | `MAGIC` + `VERSION` |
-| 2 | Metadata | name, description, impact, severity, author, report_title, cve[], cwe[], references[] |
+| 2 | Metadata | See [Metadata section](#metadata-section) |
 | 3 | Probe table | count + `(name, ProbeKind)*` |
 | 4 | String pool | UTF-8 strings (identifiers, durations as text, …) |
 | 5 | Payload pool | raw byte blobs for `Send` overrides |
@@ -89,6 +89,24 @@ Executor semantics:
 - **`Repeat`** — pushes `LoopFrame { remaining: count, head_pc: pc+1, end_pc }`, enters body.  
 - **`LoopBack`** — decrements `remaining`; if `> 0`, jump to `head_pc`, else pop frame and continue after loop.  
 - **`Break`** — pop innermost frame, jump to `end_pc`.
+
+## Metadata section
+
+Written in order after the header (`MAGIC` + `VERSION`):
+
+| Field | Encoding |
+|-------|----------|
+| `name` | optional UTF-8 string |
+| `description` | optional string |
+| `impact` | optional string |
+| `severity` | `u8` tag (0=absent, else 1–5 for low…critical) |
+| `author` | optional string |
+| `report_title` | optional string (`report` in DSL) |
+| `cve` | `u32` count + strings |
+| `cwe` | `u32` count + strings |
+| `references` | `u32` count + strings |
+
+Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable `cve` / `cwe` / `references` lines in `.ruso` append to these lists at compile time.
 
 ## Pools and IDs
 

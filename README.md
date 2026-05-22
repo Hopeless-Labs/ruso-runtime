@@ -39,7 +39,8 @@ Compile `.ruso` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ru
 |------|------|
 | `BytecodeProgram` | Probes + instructions + pools |
 | `Instr` | VM opcodes (`Send`, `Match`, `Repeat`, …) |
-| `ProgramSpec` | Probe table + check metadata |
+| `ProgramSpec` | Probe table + check metadata (incl. cve, cwe, references) |
+| `Finding` | Single positive result: metadata + evidence |
 | `SocketProbeSpec` | Generic dns/tcp/udp options |
 | `Executor` | Async execution |
 

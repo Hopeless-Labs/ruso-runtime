@@ -24,7 +24,19 @@ let result = executor.run().await?;
 | `detected` | A finding was produced |
 | `report` | Findings + metadata |
 | `variables` | Final variable map |
-| `metadata` | Check metadata from spec |
+| `metadata` | Check metadata from spec (`CheckMetadata`) |
+
+### `Finding` / `CheckMetadata`
+
+When a check matches, `finalize_finding()` builds one `Finding` from metadata plus collected evidence:
+
+| Field | Source |
+|-------|--------|
+| `name` | `name`, or `report` title if `name` omitted |
+| `description`, `impact`, `author` | Optional metadata strings |
+| `severity` | Metadata `severity`, default `info` |
+| `cve`, `cwe`, `references` | Repeatable DSL lines → `Vec<String>` |
+| `evidence` | `evidence` instructions during the run |
 
 ## Port reachability cache
 
@@ -158,4 +170,4 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 2. Compile a `.ruso` script and `Executor::from_bytecode` + manual run.  
 3. `format_human` / round-trip `encode` → `decode` for bytecode changes.
 
-Always bump `VERSION` when changing wire layout.
+Recompile stored `.bc` files when metadata wire layout changes. Bump `VERSION` when probe or instruction encoding changes.

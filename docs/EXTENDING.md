@@ -27,6 +27,24 @@ New protocol family unrelated to HTTP/socket bytes?
 
 Use hex payload for binary protocols; `session` + `repeat` for multi-step dialogs.
 
+Optional `cve`, `cwe`, and `references` lines (repeatable) attach advisory IDs and URLs to findings and CLI/JSON reports.
+
+## Adding a metadata field
+
+Example: a new `tags` list on checks.
+
+| Step | File |
+|------|------|
+| 1 | `grammar.pest` — keyword + `metadata_stmt` arm |
+| 2 | `ast.rs` — `Stmt` variant |
+| 3 | `parser/metadata.rs` + `spec_build.rs` |
+| 4 | `spec.rs` — `CheckMetadata` field |
+| 5 | `binary.rs` — `write_metadata` / `read_metadata` (append at end of metadata block) |
+| 6 | `report.rs` / `disasm.rs` — `Finding` + listing |
+| 7 | `docs/DSL_REFERENCE.md`, `BYTECODE.md`, `RUNTIME.md` |
+| 8 | `ruso-cli` `report.rs` if exposed in scan output |
+| 9 | Recompile all `.bc` files; bump `VERSION` only if probe or instruction layout changes |
+
 ## Adding a socket probe option
 
 Example: `connect_timeout 5s`.
