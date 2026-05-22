@@ -42,4 +42,4 @@ Compile scripts with the **`ruso-script`** crate; this crate does not parse `.ru
 
 ## License
 
-MIT OR Apache-2.0
+Apache License 2.0. See [LICENSE](LICENSE).
