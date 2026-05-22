@@ -5,11 +5,10 @@
 //!
 //! # Developer documentation
 //!
-//! See the Hopeless-Labs repository `docs/` folder:
-//!
-//! - Architecture — `docs/ARCHITECTURE.md`
-//! - Bytecode v2 — `docs/BYTECODE.md`
-//! - Runtime — `docs/RUNTIME.md`
+//! - [Architecture](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/ARCHITECTURE.md)
+//! - [Bytecode v2](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/BYTECODE.md)
+//! - [Runtime](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/RUNTIME.md)
+//! - [Extending](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/EXTENDING.md)
 
 pub mod contract;
 pub mod opcode;

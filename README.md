@@ -4,10 +4,16 @@ Bytecode VM and network runtime for Ruso vulnerability checks.
 
 ## Documentation
 
-- [Architecture](../docs/ARCHITECTURE.md)
-- [Bytecode v2](../docs/BYTECODE.md)
-- [Runtime guide](../docs/RUNTIME.md)
-- [Extending](../docs/EXTENDING.md)
+Full developer docs are in **[`docs/`](docs/README.md)**:
+
+| Doc | Topic |
+|-----|--------|
+| [Architecture](docs/ARCHITECTURE.md) | System design, probe table, three repos |
+| [Bytecode v2](docs/BYTECODE.md) | Wire format, pools, opcodes |
+| [Runtime](docs/RUNTIME.md) | Executor, HTTP/DNS/TCP/UDP, TLS, sessions |
+| [Extending](docs/EXTENDING.md) | Adding options, opcodes, matchers |
+
+Related repos: [ruso-script](https://github.com/Hopeless-Labs/ruso-script) (DSL + compiler), [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) (`ruso` binary).
 
 ## Usage
 
@@ -23,7 +29,7 @@ let program = decode_bytecode(&bytes)?;
 let result = Executor::from_bytecode(config, program)?.run().await?;
 ```
 
-Compile scripts with the **`ruso-script`** crate; this crate does not parse `.ruso` files.
+Compile `.ruso` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ruso-script)**; this crate does not parse source files.
 
 ## Key types
 
