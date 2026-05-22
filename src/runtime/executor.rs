@@ -40,7 +40,7 @@ impl Default for ExecutorConfig {
             base_url: String::new(),
             default_timeout: Duration::from_secs(30),
             follow_redirect: true,
-            verify_ssl: true,
+            verify_ssl: false,
             proxy: None,
         }
     }
@@ -93,6 +93,20 @@ impl Executor {
 
     pub async fn run(&self) -> Result<ExecutionResult, RuntimeError> {
         self.run_bytecode().await
+    }
+
+    fn client_for_http(&self, spec: &crate::runtime::spec::HttpRequestSpec) -> Result<Client, RuntimeError> {
+        let verify_ssl = spec.verify_ssl.unwrap_or(self.config.verify_ssl);
+        let follow_redirect = spec.follow_redirect.unwrap_or(self.config.follow_redirect);
+        if verify_ssl == self.config.verify_ssl && follow_redirect == self.config.follow_redirect {
+            return Ok(self.client.clone());
+        }
+        build_client(
+            Some(self.config.default_timeout),
+            follow_redirect,
+            verify_ssl,
+            self.config.proxy.as_deref(),
+        )
     }
 
     async fn run_bytecode(&self) -> Result<ExecutionResult, RuntimeError> {
@@ -302,8 +316,9 @@ impl Executor {
 
         let response = match probe {
             ProbeKind::Http(spec) => {
+                let client = self.client_for_http(&spec)?;
                 let http = execute_http(
-                    &self.client,
+                    &client,
                     &self.config.base_url,
                     &spec,
                     &context.variables,

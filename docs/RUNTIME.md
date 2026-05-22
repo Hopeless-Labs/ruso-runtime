@@ -45,10 +45,10 @@ Other scripts in the same `ruso scan` continue. Scripts that share the same clos
 | `base_url` | `""` | HTTP probe base (from CLI `--target`) |
 | `default_timeout` | 30s | Connect/read fallback |
 | `follow_redirect` | true | HTTP client |
-| `verify_ssl` | true | HTTP **and** TCP TLS (`tls true`) |
+| `verify_ssl` | false | HTTP **and** TCP TLS (`tls true`); scanner default skips cert verify |
 | `proxy` | none | HTTP proxy URL |
 
-CLI `--insecure` sets `verify_ssl = false`.
+CLI `--verify-tls` sets `verify_ssl = true` for the whole run. Per HTTP probe, `verify_ssl true|false` in the script overrides the global default for that request only.
 
 ## send_probe flow
 
@@ -58,7 +58,7 @@ CLI `--insecure` sets `verify_ssl = false`.
 
 ### HTTP
 
-`execute_http` builds a reqwest request from `HttpRequestSpec` + `base_url`, returns `ProbeResponse::Http`.
+`execute_http` builds a reqwest request from `HttpRequestSpec` + `base_url`, returns `ProbeResponse::Http`. TLS verify follows `HttpRequestSpec.verify_ssl` when set, otherwise `ExecutorConfig.verify_ssl`.
 
 ### DNS
 
@@ -90,7 +90,7 @@ Requires `port`. `tls` is rejected. Session reuse mirrors TCP with `ProbeSession
 
 **TCP TLS**
 
-`tokio-rustls` with WebPKI roots when `verify_ssl`; custom `NoVerifier` when insecure (scanner-style).
+`tokio-rustls` with WebPKI roots when `verify_ssl` is true; custom `NoVerifier` when false (default).
 
 **Multi-read (`read_idle_ms > 0`)**
 
