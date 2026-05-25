@@ -875,6 +875,9 @@ const OP_EXIT: u8 = 17;
 const OP_REPEAT: u8 = 18;
 const OP_LOOP_BACK: u8 = 19;
 const OP_BREAK: u8 = 20;
+const OP_SET_LIST: u8 = 21;
+const OP_FOR_LIST: u8 = 22;
+const OP_FOR_VAR: u8 = 23;
 
 fn write_code(w: &mut Writer, code: &[Instr]) {
     w.u32(code.len() as u32);
@@ -898,6 +901,12 @@ fn write_instr(w: &mut Writer, instr: &Instr) {
             w.u8(OP_SET);
             w.u32(*name);
             w.u32(*value);
+        }
+        Instr::SetList { name, start, len } => {
+            w.u8(OP_SET_LIST);
+            w.u32(*name);
+            w.u32(*start);
+            w.u16(*len);
         }
         Instr::Send { probe, payload } => {
             w.u8(OP_SEND);
@@ -943,6 +952,24 @@ fn write_instr(w: &mut Writer, instr: &Instr) {
             w.u32(*count);
             w.u32(*end_pc);
         }
+        Instr::ForList {
+            item,
+            start,
+            len,
+            end_pc,
+        } => {
+            w.u8(OP_FOR_LIST);
+            w.u32(*item);
+            w.u32(*start);
+            w.u16(*len);
+            w.u32(*end_pc);
+        }
+        Instr::ForVar { item, list, end_pc } => {
+            w.u8(OP_FOR_VAR);
+            w.u32(*item);
+            w.u32(*list);
+            w.u32(*end_pc);
+        }
         Instr::LoopBack => w.u8(OP_LOOP_BACK),
         Instr::Break => w.u8(OP_BREAK),
         Instr::Save { from, to } => {
@@ -980,6 +1007,11 @@ fn read_instr(r: &mut Reader<'_>) -> Result<Instr, BytecodeError> {
             name: r.u32()?,
             value: r.u32()?,
         },
+        OP_SET_LIST => Instr::SetList {
+            name: r.u32()?,
+            start: r.u32()?,
+            len: r.u16()?,
+        },
         OP_SEND => {
             let probe = r.u32()?;
             let payload = if r.u8()? == 0 {
@@ -1009,6 +1041,17 @@ fn read_instr(r: &mut Reader<'_>) -> Result<Instr, BytecodeError> {
         },
         OP_REPEAT => Instr::Repeat {
             count: r.u32()?,
+            end_pc: r.u32()?,
+        },
+        OP_FOR_LIST => Instr::ForList {
+            item: r.u32()?,
+            start: r.u32()?,
+            len: r.u16()?,
+            end_pc: r.u32()?,
+        },
+        OP_FOR_VAR => Instr::ForVar {
+            item: r.u32()?,
+            list: r.u32()?,
             end_pc: r.u32()?,
         },
         OP_LOOP_BACK => Instr::LoopBack,

@@ -5,16 +5,43 @@ use crate::runtime::response::ProbeResponse;
 use crate::runtime::session::ProbeSession;
 use crate::runtime::spec::{CheckMetadata, ProgramSpec};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariableValue {
+    String(String),
+    List(Vec<String>),
+}
+
+impl VariableValue {
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::List(_) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum LoopState {
+    Repeat { remaining: u32 },
+    ForEach {
+        item: String,
+        values: Vec<String>,
+        index: usize,
+        previous: Option<VariableValue>,
+    },
+}
+
+#[derive(Debug)]
 pub struct LoopFrame {
-    pub remaining: u32,
+    pub state: LoopState,
     pub head_pc: usize,
+    pub continue_pc: usize,
     pub end_pc: usize,
 }
 
 #[derive(Debug)]
 pub struct Context {
-    pub variables: HashMap<String, String>,
+    pub variables: HashMap<String, VariableValue>,
     pub responses: HashMap<String, ProbeResponse>,
     pub sessions: HashMap<String, ProbeSession>,
     pub metadata: CheckMetadata,
@@ -55,7 +82,28 @@ impl Context {
     }
 
     pub fn set_variable(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        self.variables.insert(name.into(), value.into());
+        self.variables
+            .insert(name.into(), VariableValue::String(value.into()));
+    }
+
+    pub fn set_list_variable(&mut self, name: impl Into<String>, values: Vec<String>) {
+        self.variables.insert(name.into(), VariableValue::List(values));
+    }
+
+    pub fn restore_or_remove_variable(
+        &mut self,
+        name: impl Into<String>,
+        value: Option<VariableValue>,
+    ) {
+        let name = name.into();
+        match value {
+            Some(value) => {
+                self.variables.insert(name, value);
+            }
+            None => {
+                self.variables.remove(&name);
+            }
+        }
     }
 
     pub fn response(&self, name: &str) -> Option<&ProbeResponse> {

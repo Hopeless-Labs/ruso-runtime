@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 
-pub fn interpolate(template: &str, variables: &HashMap<String, String>) -> String {
+use crate::runtime::context::VariableValue;
+use crate::runtime::error::RuntimeError;
+
+pub fn interpolate(
+    template: &str,
+    variables: &HashMap<String, VariableValue>,
+) -> Result<String, RuntimeError> {
     let mut output = String::with_capacity(template.len());
     let bytes = template.as_bytes();
     let mut index = 0;
@@ -8,7 +14,7 @@ pub fn interpolate(template: &str, variables: &HashMap<String, String>) -> Strin
     while index < bytes.len() {
         if bytes[index] == b'{' && index + 1 < bytes.len() && bytes[index + 1] == b'{' {
             if let Some((end, name)) = parse_placeholder(&template[index + 2..]) {
-                let value = variables.get(&name).cloned().unwrap_or_default();
+                let value = resolve_scalar(&name, variables)?;
                 output.push_str(&value);
                 index += 2 + end;
                 continue;
@@ -19,7 +25,20 @@ pub fn interpolate(template: &str, variables: &HashMap<String, String>) -> Strin
         index += ch.len_utf8();
     }
 
-    output
+    Ok(output)
+}
+
+pub fn resolve_scalar(
+    name: &str,
+    variables: &HashMap<String, VariableValue>,
+) -> Result<String, RuntimeError> {
+    match variables.get(name) {
+        Some(VariableValue::String(value)) => Ok(value.clone()),
+        Some(VariableValue::List(_)) => Err(RuntimeError::Other(format!(
+            "variable {name} is a list and cannot be interpolated as a string"
+        ))),
+        None => Ok(String::new()),
+    }
 }
 
 fn parse_placeholder(rest: &str) -> Option<(usize, String)> {
@@ -49,9 +68,9 @@ mod tests {
     #[test]
     fn replaces_variables() {
         let mut vars = HashMap::new();
-        vars.insert("token".into(), "abc".into());
+        vars.insert("token".into(), VariableValue::String("abc".into()));
         assert_eq!(
-            interpolate("Bearer {{ token }}", &vars),
+            interpolate("Bearer {{ token }}", &vars).unwrap(),
             "Bearer abc"
         );
     }

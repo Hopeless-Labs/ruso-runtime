@@ -5,6 +5,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, Method, RequestBuilder};
 
 use crate::runtime::body::{object_to_form, object_to_json, object_to_multipart};
+use crate::runtime::context::VariableValue;
 use crate::runtime::bytes::decode_hex;
 use crate::runtime::duration::parse_duration;
 use crate::runtime::error::RuntimeError;
@@ -17,9 +18,9 @@ pub async fn execute_http(
     client: &Client,
     base_url: &str,
     spec: &HttpRequestSpec,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableValue>,
 ) -> Result<HttpResponse, RuntimeError> {
-    let path = interpolate(&spec.path, variables);
+    let path = interpolate(&spec.path, variables)?;
     let url = join_url(base_url, &path);
     let method = to_reqwest_method(&spec.method);
     let timeout = spec
@@ -36,20 +37,24 @@ pub async fn execute_http(
     }
 
     if let Some(agent) = &spec.user_agent {
-        builder = builder.header("user-agent", interpolate(agent, variables));
+        builder = builder.header("user-agent", interpolate(agent, variables)?);
     }
 
     for (name, value) in &spec.headers {
         builder = builder.header(
-            interpolate(name, variables),
-            interpolate(value, variables),
+            interpolate(name, variables)?,
+            interpolate(value, variables)?,
         );
     }
 
     for (name, value) in &spec.cookies {
         builder = builder.header(
             "cookie",
-            format!("{}={}", interpolate(name, variables), interpolate(value, variables)),
+            format!(
+                "{}={}",
+                interpolate(name, variables)?,
+                interpolate(value, variables)?
+            ),
         );
     }
 
@@ -58,12 +63,9 @@ pub async fn execute_http(
             .queries
             .iter()
             .map(|(name, value)| {
-                (
-                    interpolate(name, variables),
-                    interpolate(value, variables),
-                )
+                Ok((interpolate(name, variables)?, interpolate(value, variables)?))
             })
-            .collect();
+            .collect::<Result<_, RuntimeError>>()?;
         builder = builder.query(&pairs);
     }
 
@@ -112,27 +114,27 @@ pub fn build_client(
 fn apply_body(
     builder: RequestBuilder,
     spec: &HttpRequestSpec,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableValue>,
 ) -> Result<RequestBuilder, RuntimeError> {
     if let Some(body) = &spec.json_body {
-        let json = object_to_json(body, variables);
+        let json = object_to_json(body, variables)?;
         return Ok(builder
             .header("content-type", "application/json")
             .body(json));
     }
     if let Some(body) = &spec.data_body {
-        let form = object_to_form(body, variables);
+        let form = object_to_form(body, variables)?;
         return Ok(builder.form(&form));
     }
     if let Some(raw) = &spec.raw_body {
-        return Ok(builder.body(interpolate(raw, variables)));
+        return Ok(builder.body(interpolate(raw, variables)?));
     }
     if let Some(body) = &spec.multipart_body {
         let form = object_to_multipart(body, variables)?;
         return Ok(builder.multipart(form));
     }
     if let Some(hex) = &spec.body_bytes {
-        let bytes = decode_hex(&interpolate(hex, variables))?;
+        let bytes = decode_hex(&interpolate(hex, variables)?)?;
         return Ok(builder.body(bytes));
     }
     Ok(builder)

@@ -28,4 +28,5 @@ pub use executor::{ExecutionResult, Executor, ExecutorConfig};
 #[allow(unused_imports)]
 pub use port_cache::{scan_target_host_port, PortCache, PortCheck};
 pub use report::{Finding, Report};
+pub use context::VariableValue;
 pub use spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec, SocketProbeSpec};

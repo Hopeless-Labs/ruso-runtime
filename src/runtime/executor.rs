@@ -6,7 +6,7 @@ use reqwest::Client;
 
 use crate::runtime::binary;
 use crate::runtime::bytecode::{BytecodeProgram, Instr};
-use crate::runtime::context::Context;
+use crate::runtime::context::{Context, LoopFrame, LoopState, VariableValue};
 use crate::runtime::dns::{resolve_host, run_dns_probe};
 use crate::runtime::response::SocketResponse;
 use crate::runtime::session::{
@@ -63,7 +63,7 @@ pub struct ExecutionResult {
     /// Port probes performed before execution (empty for HTTP-only checks).
     pub port_checks: Vec<PortCheck>,
     pub report: Report,
-    pub variables: HashMap<String, String>,
+    pub variables: HashMap<String, VariableValue>,
     pub metadata: crate::runtime::spec::CheckMetadata,
 }
 
@@ -136,7 +136,16 @@ impl Executor {
                 Instr::Set { name, value } => {
                     let name = &self.program.strings[*name as usize];
                     let value = &self.program.strings[*value as usize];
-                    context.set_variable(name.clone(), interpolate(value, &context.variables));
+                    context.set_variable(name.clone(), interpolate(value, &context.variables)?);
+                    pc += 1;
+                }
+                Instr::SetList { name, start, len } => {
+                    let name = &self.program.strings[*name as usize];
+                    let values = self.program.strings[*start as usize..(*start + *len as u32) as usize]
+                        .iter()
+                        .map(|value| interpolate(value, &context.variables))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    context.set_list_variable(name.clone(), values);
                     pc += 1;
                 }
                 Instr::Send { probe, payload } => {
@@ -180,34 +189,165 @@ impl Executor {
                     }
                 }
                 Instr::Repeat { count, end_pc } => {
-                    context.loop_stack.push(crate::runtime::context::LoopFrame {
-                        remaining: *count,
+                    if *count == 0 {
+                        pc = *end_pc as usize;
+                        continue;
+                    }
+                    context.loop_stack.push(LoopFrame {
+                        state: LoopState::Repeat { remaining: *count },
                         head_pc: pc + 1,
+                        continue_pc: (*end_pc as usize).saturating_sub(1),
+                        end_pc: *end_pc as usize,
+                    });
+                    pc += 1;
+                }
+                Instr::ForList {
+                    item,
+                    start,
+                    len,
+                    end_pc,
+                } => {
+                    let item = self.program.strings[*item as usize].clone();
+                    let values = self.program.strings[*start as usize..(*start + *len as u32) as usize]
+                        .iter()
+                        .map(|value| interpolate(value, &context.variables))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if values.is_empty() {
+                        pc = *end_pc as usize;
+                        continue;
+                    }
+                    let previous = context.variables.get(&item).cloned();
+                    context.set_variable(item.clone(), values[0].clone());
+                    context.loop_stack.push(LoopFrame {
+                        state: LoopState::ForEach {
+                            item,
+                            values,
+                            index: 0,
+                            previous,
+                        },
+                        head_pc: pc + 1,
+                        continue_pc: (*end_pc as usize).saturating_sub(1),
+                        end_pc: *end_pc as usize,
+                    });
+                    pc += 1;
+                }
+                Instr::ForVar { item, list, end_pc } => {
+                    let item = self.program.strings[*item as usize].clone();
+                    let list_name = &self.program.strings[*list as usize];
+                    let values = match context.variables.get(list_name) {
+                        Some(VariableValue::List(values)) => values.clone(),
+                        Some(VariableValue::String(_)) => {
+                            return Err(RuntimeError::Other(format!(
+                                "variable {list_name} is not a list"
+                            )))
+                        }
+                        None => Vec::new(),
+                    };
+                    if values.is_empty() {
+                        pc = *end_pc as usize;
+                        continue;
+                    }
+                    let previous = context.variables.get(&item).cloned();
+                    context.set_variable(item.clone(), values[0].clone());
+                    context.loop_stack.push(LoopFrame {
+                        state: LoopState::ForEach {
+                            item,
+                            values,
+                            index: 0,
+                            previous,
+                        },
+                        head_pc: pc + 1,
+                        continue_pc: (*end_pc as usize).saturating_sub(1),
                         end_pc: *end_pc as usize,
                     });
                     pc += 1;
                 }
                 Instr::LoopBack => {
-                    let frame = context
-                        .loop_stack
-                        .last_mut()
-                        .ok_or_else(|| RuntimeError::Other("loop_back outside repeat".into()))?;
-                    if frame.remaining > 1 {
-                        frame.remaining -= 1;
-                        pc = frame.head_pc;
-                    } else {
-                        let end_pc = frame.end_pc;
-                        context.loop_stack.pop();
-                        pc = end_pc;
+                    enum LoopAction {
+                        Jump(usize),
+                        End(usize),
+                        SetAndJump {
+                            item: String,
+                            value: String,
+                            head_pc: usize,
+                        },
+                        RestoreAndEnd {
+                            item: String,
+                            previous: Option<VariableValue>,
+                            end_pc: usize,
+                        },
+                    }
+
+                    let action = {
+                        let frame = context
+                            .loop_stack
+                            .last_mut()
+                            .ok_or_else(|| RuntimeError::Other("loop_back outside loop".into()))?;
+                        match &mut frame.state {
+                            LoopState::Repeat { remaining } => {
+                                if *remaining > 1 {
+                                    *remaining -= 1;
+                                    LoopAction::Jump(frame.head_pc)
+                                } else {
+                                    LoopAction::End(frame.end_pc)
+                                }
+                            }
+                            LoopState::ForEach {
+                                item,
+                                values,
+                                index,
+                                previous,
+                            } => {
+                                if *index + 1 < values.len() {
+                                    *index += 1;
+                                    LoopAction::SetAndJump {
+                                        item: item.clone(),
+                                        value: values[*index].clone(),
+                                        head_pc: frame.head_pc,
+                                    }
+                                } else {
+                                    LoopAction::RestoreAndEnd {
+                                        item: item.clone(),
+                                        previous: previous.clone(),
+                                        end_pc: frame.end_pc,
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    match action {
+                        LoopAction::Jump(head_pc) => {
+                            pc = head_pc;
+                        }
+                        LoopAction::End(end_pc) => {
+                            context.loop_stack.pop();
+                            pc = end_pc;
+                        }
+                        LoopAction::SetAndJump { item, value, head_pc } => {
+                            context.set_variable(item, value);
+                            pc = head_pc;
+                        }
+                        LoopAction::RestoreAndEnd {
+                            item,
+                            previous,
+                            end_pc,
+                        } => {
+                            context.loop_stack.pop();
+                            context.restore_or_remove_variable(item, previous);
+                            pc = end_pc;
+                        }
                     }
                 }
                 Instr::Break => {
-                    let end_pc = context
+                    let frame = context
                         .loop_stack
                         .pop()
-                        .ok_or_else(|| RuntimeError::Other("break outside repeat".into()))?
-                        .end_pc;
-                    pc = end_pc;
+                        .ok_or_else(|| RuntimeError::Other("break outside loop".into()))?;
+                    if let LoopState::ForEach { item, previous, .. } = frame.state {
+                        context.restore_or_remove_variable(item, previous);
+                    }
+                    pc = frame.end_pc;
                 }
                 Instr::Save { from, to } => {
                     let from = &self.program.strings[*from as usize];
@@ -255,7 +395,12 @@ impl Executor {
                     return Err(RuntimeError::Flow("fail".into()));
                 }
                 Instr::Continue => {
-                    pc += 1;
+                    let continue_pc = context
+                        .loop_stack
+                        .last()
+                        .ok_or_else(|| RuntimeError::Other("continue outside loop".into()))?
+                        .continue_pc;
+                    pc = continue_pc;
                 }
             }
         }
@@ -279,22 +424,28 @@ impl Executor {
         &self,
         spec: &SocketProbeSpec,
         context: &Context,
-    ) -> SocketProbeSpec {
-        SocketProbeSpec {
-            host: interpolate(&spec.host, &context.variables),
-            port: spec.port,
-            payload: spec.payload.as_ref().map(|bytes| {
+    ) -> Result<SocketProbeSpec, RuntimeError> {
+        let payload = spec
+            .payload
+            .as_ref()
+            .map(|bytes| {
                 if let Ok(text) = std::str::from_utf8(bytes) {
-                    interpolate(text, &context.variables).into_bytes()
+                    interpolate(text, &context.variables).map(|value| value.into_bytes())
                 } else {
-                    bytes.clone()
+                    Ok(bytes.clone())
                 }
-            }),
+            })
+            .transpose()?;
+
+        Ok(SocketProbeSpec {
+            host: interpolate(&spec.host, &context.variables)?,
+            port: spec.port,
+            payload,
             tls: spec.tls,
             session: spec.session,
             read_max: spec.read_max,
             read_idle_ms: spec.read_idle_ms,
-        }
+        })
     }
 
     #[tracing::instrument(level = "trace", skip(self, context), fields(probe = name))]
@@ -329,7 +480,7 @@ impl Executor {
                 ProbeResponse::Http(http)
             }
             ProbeKind::Dns(spec) => {
-                let mut spec = self.interpolate_socket_spec(&spec, context);
+                let mut spec = self.interpolate_socket_spec(&spec, context)?;
                 if let Some(p) = payload_override {
                     spec.payload = Some(p);
                 }
@@ -340,7 +491,7 @@ impl Executor {
                 }
             }
             ProbeKind::Tcp(spec) => {
-                let spec = self.interpolate_socket_spec(&spec, context);
+                let spec = self.interpolate_socket_spec(&spec, context)?;
                 let port = spec.port.ok_or_else(|| {
                     RuntimeError::Other(format!("tcp probe requires port"))
                 })?;
@@ -351,7 +502,7 @@ impl Executor {
                 )
             }
             ProbeKind::Udp(spec) => {
-                let spec = self.interpolate_socket_spec(&spec, context);
+                let spec = self.interpolate_socket_spec(&spec, context)?;
                 let port = spec.port.ok_or_else(|| {
                     RuntimeError::Other(format!("udp probe requires port"))
                 })?;

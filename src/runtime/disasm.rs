@@ -225,10 +225,20 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
             .map(|s| format!("{s:?}"))
             .unwrap_or_else(|| format!("#{idx}?"))
     };
+    let string_span = |start: u32, len: u16| -> String {
+        bytecode.strings[start as usize..start as usize + len as usize]
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
 
     match instr {
         Instr::Set { name, value } => {
             format!("Set name={} value={}", str_at(*name), str_at(*value))
+        }
+        Instr::SetList { name, start, len } => {
+            format!("SetList name={} values=[{}]", str_at(*name), string_span(*start, *len))
         }
         Instr::Send { probe, payload } => {
             if let Some(id) = payload {
@@ -256,6 +266,19 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
             format!("IfMatch [{}] else_pc={else_pc}", matcher)
         }
         Instr::Repeat { count, end_pc } => format!("Repeat count={count} end_pc={end_pc}"),
+        Instr::ForList {
+            item,
+            start,
+            len,
+            end_pc,
+        } => format!(
+            "ForList item={} values=[{}] end_pc={end_pc}",
+            str_at(*item),
+            string_span(*start, *len)
+        ),
+        Instr::ForVar { item, list, end_pc } => {
+            format!("ForVar item={} list={} end_pc={end_pc}", str_at(*item), str_at(*list))
+        }
         Instr::LoopBack => "LoopBack".into(),
         Instr::Break => "Break".into(),
         Instr::Save { from, to } => {

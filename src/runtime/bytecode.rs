@@ -25,6 +25,11 @@ pub enum Instr {
         name: u32,
         value: u32,
     },
+    SetList {
+        name: u32,
+        start: u32,
+        len: u16,
+    },
     Send {
         probe: u32,
         payload: Option<u32>,
@@ -49,6 +54,17 @@ pub enum Instr {
     },
     Repeat {
         count: u32,
+        end_pc: Pc,
+    },
+    ForList {
+        item: u32,
+        start: u32,
+        len: u16,
+        end_pc: Pc,
+    },
+    ForVar {
+        item: u32,
+        list: u32,
         end_pc: Pc,
     },
     LoopBack,

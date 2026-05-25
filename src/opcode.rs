@@ -35,6 +35,9 @@
 //! | 18   | Repeat      | `count: u32`, `end_pc: u32`      |
 //! | 19   | LoopBack    | —                                |
 //! | 20   | Break       | —                                |
+//! | 21   | SetList     | `name_id: u32`, `start: u32`, `len: u16` |
+//! | 22   | ForList     | `item_id: u32`, `start: u32`, `len: u16`, `end_pc: u32` |
+//! | 23   | ForVar      | `item_id: u32`, `list_id: u32`, `end_pc: u32` |
 //!
 //! Compilers must emit [`crate::BytecodeProgram`] compatible with [`crate::VERSION`].
 
@@ -61,3 +64,6 @@ pub const OP_EXIT: u8 = 17;
 pub const OP_REPEAT: u8 = 18;
 pub const OP_LOOP_BACK: u8 = 19;
 pub const OP_BREAK: u8 = 20;
+pub const OP_SET_LIST: u8 = 21;
+pub const OP_FOR_LIST: u8 = 22;
+pub const OP_FOR_VAR: u8 = 23;
