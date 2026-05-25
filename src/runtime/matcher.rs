@@ -1,4 +1,5 @@
 use regex::Regex;
+use regex::bytes::Regex as BytesRegex;
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::response::ProbeResponse;
@@ -77,20 +78,22 @@ pub fn evaluate(matcher: &QualifiedMatch, response: &ProbeResponse) -> Result<bo
         }
         (FieldKind::Response | FieldKind::Banner, MatchPredicate::Contains(_))
         | (FieldKind::Response | FieldKind::Banner, MatchPredicate::NotContains(_)) => {
-            let data = socket_data(response).map_err(|_| RuntimeError::WrongProbeKind {
+            let data = socket_bytes(response).map_err(|_| RuntimeError::WrongProbeKind {
                 name: field.target.clone(),
             })?;
             match predicate {
-                MatchPredicate::Contains(text) => Ok(data.contains(text)),
-                MatchPredicate::NotContains(text) => Ok(!data.contains(text)),
+                MatchPredicate::Contains(text) => Ok(bytes_contains(data, text.as_bytes())),
+                MatchPredicate::NotContains(text) => Ok(!bytes_contains(data, text.as_bytes())),
                 _ => unreachable!(),
             }
         }
         (FieldKind::Response | FieldKind::Banner, MatchPredicate::Regex(pattern)) => {
-            let data = socket_data(response).map_err(|_| RuntimeError::WrongProbeKind {
+            let data = socket_bytes(response).map_err(|_| RuntimeError::WrongProbeKind {
                 name: field.target.clone(),
             })?;
-            let regex = Regex::new(pattern)?;
+            // Use the bytes regex flavor so patterns can target non-UTF-8
+            // banners (binary protocols, control bytes, etc.).
+            let regex = BytesRegex::new(pattern)?;
             Ok(regex.is_match(data))
         }
         _ => Err(RuntimeError::Other(format!(
@@ -130,8 +133,100 @@ pub fn evaluate_any(
     Ok(false)
 }
 
-fn socket_data<'a>(response: &'a ProbeResponse) -> Result<&'a str, ()> {
+fn socket_bytes<'a>(response: &'a ProbeResponse) -> Result<&'a [u8], ()> {
     Ok(&response.as_socket()?.data)
+}
+
+/// Byte-wise substring search. Returns true if `haystack` contains `needle`
+/// as a contiguous slice. Mirrors `str::contains` semantics: empty needle
+/// matches anywhere (so the result is `true`).
+fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bytes_contains, evaluate};
+    use crate::contract::{FieldKind, MatchPredicate, QualifiedField, QualifiedMatch};
+    use crate::runtime::response::{ProbeResponse, SocketResponse};
+
+    #[test]
+    fn bytes_contains_matches_ascii() {
+        assert!(bytes_contains(b"hello world", b"world"));
+        assert!(!bytes_contains(b"hello world", b"xyz"));
+    }
+
+    #[test]
+    fn bytes_contains_matches_non_utf8() {
+        let haystack = &[0x00, 0xff, 0xab, 0xcd, 0xef][..];
+        assert!(bytes_contains(haystack, &[0xab, 0xcd]));
+        assert!(!bytes_contains(haystack, &[0xcd, 0xab]));
+    }
+
+    #[test]
+    fn bytes_contains_empty_needle() {
+        assert!(bytes_contains(b"anything", b""));
+    }
+
+    #[test]
+    fn bytes_contains_needle_longer_than_haystack() {
+        assert!(!bytes_contains(b"hi", b"hello"));
+    }
+
+    fn socket_response_with(data: Vec<u8>) -> ProbeResponse {
+        ProbeResponse::Socket(SocketResponse {
+            host: "h".into(),
+            port: 1,
+            data,
+        })
+    }
+
+    fn matcher_response_contains(needle: &str) -> QualifiedMatch {
+        QualifiedMatch {
+            field: QualifiedField {
+                target: "p".into(),
+                kind: FieldKind::Response,
+            },
+            predicate: MatchPredicate::Contains(needle.into()),
+        }
+    }
+
+    #[test]
+    fn evaluate_matches_binary_banner_through_response_field() {
+        // Real-world case: SSH server banner contains non-UTF-8 sequences in
+        // some protocol versions. Before the bytes refactor, lossy decoding
+        // would mangle this and the match would silently fail.
+        let banner: Vec<u8> = vec![
+            b'S', b'S', b'H', b'-', b'2', b'.', b'0', b'-', 0xff, 0xab, b'\r', b'\n',
+        ];
+        let response = socket_response_with(banner);
+        let matcher = matcher_response_contains("SSH-2.0-");
+        assert!(evaluate(&matcher, &response).unwrap());
+    }
+
+    #[test]
+    fn evaluate_regex_on_binary_banner() {
+        // Banner has non-UTF-8 bytes (0xff). The regex anchors literal text
+        // around them — pre-refactor the lossy String would have replaced
+        // 0xff with U+FFFD and broken any pattern positioned against it.
+        // Use `(?-u:.)` to opt into non-Unicode `.` that matches any byte.
+        let banner: Vec<u8> = vec![0x00, b'A', b'B', 0xff, b'C'];
+        let response = socket_response_with(banner);
+        let matcher = QualifiedMatch {
+            field: QualifiedField {
+                target: "p".into(),
+                kind: FieldKind::Response,
+            },
+            predicate: MatchPredicate::Regex(r"AB(?-u:.)C".into()),
+        };
+        assert!(evaluate(&matcher, &response).unwrap());
+    }
 }
 
 fn find_header(headers: &std::collections::HashMap<String, String>, name: &str) -> String {

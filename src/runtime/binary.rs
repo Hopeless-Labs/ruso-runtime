@@ -328,7 +328,8 @@ fn read_severity(r: &mut Reader<'_>) -> Result<Severity, BytecodeError> {
         1 => Severity::Medium,
         2 => Severity::High,
         3 => Severity::Critical,
-        _ => Severity::Info,
+        4 => Severity::Info,
+        _ => return Err(BytecodeError::Corrupt("severity")),
     })
 }
 
@@ -456,11 +457,12 @@ fn http_method_tag(m: &HttpMethod) -> u8 {
 
 fn read_http_method(r: &mut Reader<'_>) -> Result<HttpMethod, BytecodeError> {
     Ok(match r.u8()? {
+        0 => HttpMethod::Get,
         1 => HttpMethod::Post,
         2 => HttpMethod::Put,
         3 => HttpMethod::Patch,
         4 => HttpMethod::Delete,
-        _ => HttpMethod::Get,
+        _ => return Err(BytecodeError::Corrupt("http method")),
     })
 }
 
@@ -730,12 +732,13 @@ fn cmp_op_tag(op: CmpOp) -> u8 {
 
 fn read_cmp_op(r: &mut Reader<'_>) -> Result<CmpOp, BytecodeError> {
     Ok(match r.u8()? {
+        0 => CmpOp::Eq,
         1 => CmpOp::Ne,
         2 => CmpOp::Lt,
         3 => CmpOp::Gt,
         4 => CmpOp::Le,
         5 => CmpOp::Ge,
-        _ => CmpOp::Eq,
+        _ => return Err(BytecodeError::Corrupt("cmp op")),
     })
 }
 
@@ -758,9 +761,10 @@ fn write_cmp_value(w: &mut Writer, value: &CmpValue) {
 
 fn read_cmp_value(r: &mut Reader<'_>) -> Result<CmpValue, BytecodeError> {
     Ok(match r.u8()? {
+        0 => CmpValue::Number(r.u32()? as u64),
         1 => CmpValue::String(r.str()?),
         2 => CmpValue::Duration(r.str()?),
-        _ => CmpValue::Number(r.u32()? as u64),
+        _ => return Err(BytecodeError::Corrupt("cmp value")),
     })
 }
 
@@ -1084,5 +1088,56 @@ mod tests {
         let bytes = vec![0x52, 0x55, 0x53, 0x4f, 0x01, 0xff];
         let hex = bytes_to_hex(&bytes);
         assert_eq!(hex_to_bytes(&hex).unwrap(), bytes);
+    }
+
+    #[test]
+    fn read_severity_rejects_unknown_byte() {
+        let mut r = Reader::new(&[0x99]);
+        match read_severity(&mut r) {
+            Err(BytecodeError::Corrupt("severity")) => {}
+            other => panic!("expected Corrupt(severity), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_severity_accepts_known_bytes() {
+        for (byte, expected) in [
+            (0u8, Severity::Low),
+            (1, Severity::Medium),
+            (2, Severity::High),
+            (3, Severity::Critical),
+            (4, Severity::Info),
+        ] {
+            let data = [byte];
+            let mut r = Reader::new(&data);
+            assert_eq!(read_severity(&mut r).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn read_http_method_rejects_unknown_byte() {
+        let mut r = Reader::new(&[0x42]);
+        assert!(matches!(
+            read_http_method(&mut r),
+            Err(BytecodeError::Corrupt("http method"))
+        ));
+    }
+
+    #[test]
+    fn read_cmp_op_rejects_unknown_byte() {
+        let mut r = Reader::new(&[0xfe]);
+        assert!(matches!(
+            read_cmp_op(&mut r),
+            Err(BytecodeError::Corrupt("cmp op"))
+        ));
+    }
+
+    #[test]
+    fn read_cmp_value_rejects_unknown_byte() {
+        let mut r = Reader::new(&[0x77]);
+        assert!(matches!(
+            read_cmp_value(&mut r),
+            Err(BytecodeError::Corrupt("cmp value"))
+        ));
     }
 }

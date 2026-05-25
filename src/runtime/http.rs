@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use futures::StreamExt;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Method, RequestBuilder};
 
@@ -19,6 +20,7 @@ pub async fn execute_http(
     base_url: &str,
     spec: &HttpRequestSpec,
     variables: &HashMap<String, VariableValue>,
+    max_response_bytes: usize,
 ) -> Result<HttpResponse, RuntimeError> {
     let path = interpolate(&spec.path, variables)?;
     let url = join_url(base_url, &path);
@@ -76,7 +78,7 @@ pub async fn execute_http(
     let elapsed = started.elapsed();
     let status = response.status().as_u16();
     let headers = flatten_headers(response.headers());
-    let body = response.text().await?;
+    let body = read_body_capped(response, max_response_bytes).await?;
 
     Ok(HttpResponse {
         status,
@@ -84,6 +86,43 @@ pub async fn execute_http(
         body,
         elapsed,
     })
+}
+
+/// Stream the response body into a buffer, stopping once `max_bytes` is
+/// reached. Caps memory use against malicious targets returning multi-GB
+/// payloads. The returned `String` is a lossy UTF-8 decode of the truncated
+/// bytes — matchers that need byte-precise comparison should use socket
+/// probes, not HTTP body.
+async fn read_body_capped(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, RuntimeError> {
+    if max_bytes == 0 {
+        return Ok(String::new());
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = max_bytes.saturating_sub(buf.len());
+        if remaining == 0 {
+            tracing::warn!(
+                limit = max_bytes,
+                "http response body truncated at max_response_bytes"
+            );
+            break;
+        }
+        let take = chunk.len().min(remaining);
+        buf.extend_from_slice(&chunk[..take]);
+        if take < chunk.len() {
+            tracing::warn!(
+                limit = max_bytes,
+                "http response body truncated at max_response_bytes"
+            );
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 pub fn build_client(

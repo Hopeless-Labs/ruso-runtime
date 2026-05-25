@@ -13,7 +13,7 @@
 pub mod contract;
 pub mod opcode;
 mod runtime;
-mod util;
+pub mod util;
 
 pub use contract::{
     BodyValue, CmpOp, CmpValue, EvidenceKind, ExtractSource, FieldKind, HttpMethod, InlinePart,
@@ -28,3 +28,4 @@ pub use runtime::{
     bytes_to_hex, bytes_to_hex_dump,
     decode_bytecode, disasm, encode_bytecode, format_human, hex_to_bytes, load_bytecode_input,
 };
+pub use util::truncate_str;

@@ -17,11 +17,25 @@ pub struct DnsResolveResponse {
 }
 
 /// Raw bytes from TCP, UDP, or wire-format DNS (`host` + `port` + optional `payload`).
+///
+/// `data` holds the response bytes exactly as received. For binary protocols
+/// (SSH, MySQL, DNS wire, etc.) lossy UTF-8 conversion would replace non-text
+/// bytes with `U+FFFD`, breaking byte-precise matching — so the runtime keeps
+/// the raw bytes here and only decodes lossily when surfacing evidence to
+/// humans via [`SocketResponse::data_lossy`].
 #[derive(Debug, Clone)]
 pub struct SocketResponse {
     pub host: String,
     pub port: u16,
-    pub data: String,
+    pub data: Vec<u8>,
+}
+
+impl SocketResponse {
+    /// Lossy UTF-8 view of `data` for human-facing reporting only. Do not use
+    /// for matching — bytes that are not valid UTF-8 become `U+FFFD`.
+    pub fn data_lossy(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.data)
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -19,9 +19,18 @@ pub async fn resolve_host(host: &str) -> Result<DnsResolveResponse, RuntimeError
 
 pub async fn run_dns_probe(
     spec: &SocketProbeSpec,
-    timeout: Duration,
+    connect_timeout: Duration,
+    io_timeout: Duration,
 ) -> Result<SocketResponse, RuntimeError> {
     let port = spec.port.unwrap_or(53);
     let host = spec.host.as_str();
-    exchange_udp(host, port, spec.payload.as_deref(), spec, timeout).await
+    exchange_udp(
+        host,
+        port,
+        spec.payload.as_deref(),
+        spec,
+        connect_timeout,
+        io_timeout,
+    )
+    .await
 }

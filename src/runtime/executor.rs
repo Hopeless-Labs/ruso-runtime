@@ -28,7 +28,15 @@ use crate::contract::{EvidenceKind, ExtractSource};
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
     pub base_url: String,
+    /// Connect timeout for HTTP requests and TCP/UDP/DNS probes.
     pub default_timeout: Duration,
+    /// Per-read I/O timeout for socket probes (TCP/UDP/DNS). Falls back to
+    /// `default_timeout` if not explicitly tuned.
+    pub read_timeout: Duration,
+    /// Maximum HTTP response body size in bytes. Larger responses are
+    /// truncated at this boundary to bound memory use against malicious
+    /// or misconfigured targets.
+    pub max_response_bytes: usize,
     pub follow_redirect: bool,
     pub verify_ssl: bool,
     pub proxy: Option<String>,
@@ -39,6 +47,8 @@ impl Default for ExecutorConfig {
         Self {
             base_url: String::new(),
             default_timeout: Duration::from_secs(30),
+            read_timeout: Duration::from_secs(10),
+            max_response_bytes: 10 * 1024 * 1024, // 10 MiB
             follow_redirect: true,
             verify_ssl: false,
             proxy: None,
@@ -475,6 +485,7 @@ impl Executor {
                     &self.config.base_url,
                     &spec,
                     &context.variables,
+                    self.config.max_response_bytes,
                 )
                 .await?;
                 ProbeResponse::Http(http)
@@ -487,7 +498,9 @@ impl Executor {
                 if spec.is_dns_resolver_mode() {
                     ProbeResponse::DnsResolve(resolve_host(&spec.host).await?)
                 } else {
-                    ProbeResponse::Socket(run_dns_probe(&spec, timeout).await?)
+                    ProbeResponse::Socket(
+                        run_dns_probe(&spec, timeout, self.config.read_timeout).await?,
+                    )
                 }
             }
             ProbeKind::Tcp(spec) => {
@@ -522,7 +535,7 @@ impl Executor {
                 (&response, context.responses.get(name))
             {
                 let mut merged = existing.clone();
-                merged.data.push_str(&chunk.data);
+                merged.data.extend_from_slice(&chunk.data);
                 context.store_response(name, ProbeResponse::Socket(merged));
                 return Ok(());
             }
@@ -541,7 +554,7 @@ impl Executor {
         context: &mut Context,
     ) -> Result<SocketResponse, RuntimeError> {
         let read = read_opts_from_spec(spec);
-        let io_timeout = Duration::from_secs(3);
+        let io_timeout = self.config.read_timeout;
 
         if spec.session {
             if let Some(ProbeSession::Tcp(session)) = context.sessions.get_mut(name) {
@@ -575,6 +588,7 @@ impl Executor {
             &send_spec,
             self.config.verify_ssl,
             timeout,
+            io_timeout,
         )
         .await
     }
@@ -589,7 +603,7 @@ impl Executor {
         context: &mut Context,
     ) -> Result<SocketResponse, RuntimeError> {
         let read = read_opts_from_spec(spec);
-        let io_timeout = Duration::from_secs(3);
+        let io_timeout = self.config.read_timeout;
 
         if spec.tls {
             return Err(RuntimeError::Other("tls is not supported for udp".into()));
@@ -616,7 +630,7 @@ impl Executor {
             });
         }
 
-        exchange_udp(&spec.host, port, payload, spec, timeout).await
+        exchange_udp(&spec.host, port, payload, spec, timeout, io_timeout).await
     }
 
     async fn retry_send(
@@ -811,7 +825,9 @@ fn evidence_haystack(response: &ProbeResponse) -> String {
     match response {
         ProbeResponse::Http(http) => http.body.clone(),
         ProbeResponse::DnsResolve(dns) => dns.answers.join(" "),
-        ProbeResponse::Socket(sock) => sock.data.clone(),
+        // Socket data is bytes; evidence is human-facing, so a lossy decode is
+        // intentional here. Matching elsewhere still operates on raw bytes.
+        ProbeResponse::Socket(sock) => sock.data_lossy().into_owned(),
     }
 }
 
