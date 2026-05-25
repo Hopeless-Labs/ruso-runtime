@@ -74,11 +74,12 @@ impl PortCache {
             }
         }
 
-        let has_http = spec.probes.values().any(|k| matches!(k, ProbeKind::Http(_)));
-        if has_http {
-            if let Some((host, port)) = scan_target_host_port(base_url) {
-                out.push((host, port));
-            }
+        let has_http = spec
+            .probes
+            .values()
+            .any(|k| matches!(k, ProbeKind::Http(_)));
+        if has_http && let Some((host, port)) = scan_target_host_port(base_url) {
+            out.push((host, port));
         }
 
         dedupe_endpoints(out)
@@ -117,10 +118,10 @@ impl PortCache {
         let key = (host.to_string(), port);
         {
             let guard = self.entries.lock().await;
-            if let Some(entry) = guard.get(&key) {
-                if entry.checked_at.elapsed() < CACHE_TTL {
-                    return entry.state;
-                }
+            if let Some(entry) = guard.get(&key)
+                && entry.checked_at.elapsed() < CACHE_TTL
+            {
+                return entry.state;
             }
         }
 

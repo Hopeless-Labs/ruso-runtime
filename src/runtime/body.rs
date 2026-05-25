@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use reqwest::multipart::{Form, Part};
 
+use crate::contract::{BodyValue, InlinePart, InlinePartBody, ObjectBody};
 use crate::runtime::bytes::decode_hex;
 use crate::runtime::context::VariableValue;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::interpolate::{interpolate, resolve_scalar};
-use crate::contract::{BodyValue, InlinePart, InlinePartBody, ObjectBody};
 
 pub fn object_to_json(
     body: &ObjectBody,

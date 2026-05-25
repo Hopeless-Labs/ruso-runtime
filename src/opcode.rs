@@ -41,8 +41,8 @@
 //!
 //! Compilers must emit [`crate::BytecodeProgram`] compatible with [`crate::VERSION`].
 
-pub use crate::runtime::bytecode::{BytecodeProgram, Instr as Opcode, Pc};
 pub use crate::runtime::binary::{MAGIC, VERSION};
+pub use crate::runtime::bytecode::{BytecodeProgram, Instr as Opcode, Pc};
 
 pub const OP_SET: u8 = 1;
 pub const OP_SEND: u8 = 2;

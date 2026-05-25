@@ -2,10 +2,7 @@ use crate::runtime::error::RuntimeError;
 
 /// Decode a contiguous hex string (spaces allowed) into raw bytes.
 pub fn decode_hex(input: &str) -> Result<Vec<u8>, RuntimeError> {
-    let hex: String = input
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect();
+    let hex: String = input.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     if hex.is_empty() {
         return Ok(Vec::new());
     }

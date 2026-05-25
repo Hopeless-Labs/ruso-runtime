@@ -4,26 +4,28 @@ use std::time::Duration;
 use regex::Regex;
 use reqwest::Client;
 
+use crate::contract::{EvidenceKind, ExtractSource};
 use crate::runtime::binary;
 use crate::runtime::bytecode::{BytecodeProgram, Instr};
 use crate::runtime::context::{Context, LoopFrame, LoopState, VariableValue};
 use crate::runtime::dns::{resolve_host, run_dns_probe};
-use crate::runtime::response::SocketResponse;
-use crate::runtime::session::{
-    open_tcp_session, open_udp_session, read_opts_from_spec, ProbeSession,
-};
-use crate::runtime::socket::{exchange_tcp, exchange_udp, tcp_session_exchange, udp_session_exchange};
-use crate::runtime::spec::SocketProbeSpec;
 use crate::runtime::duration::parse_duration;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::http::{build_client, execute_http};
-use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
 use crate::runtime::interpolate::interpolate;
+use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
+use crate::runtime::port_cache::{PortCache, PortCheck, scan_target_host_port};
 use crate::runtime::report::Report;
 use crate::runtime::response::ProbeResponse;
-use crate::runtime::port_cache::{PortCache, PortCheck, scan_target_host_port};
+use crate::runtime::response::SocketResponse;
+use crate::runtime::session::{
+    ProbeSession, open_tcp_session, open_udp_session, read_opts_from_spec,
+};
+use crate::runtime::socket::{
+    exchange_tcp, exchange_udp, tcp_session_exchange, udp_session_exchange,
+};
 use crate::runtime::spec::ProbeKind;
-use crate::contract::{EvidenceKind, ExtractSource};
+use crate::runtime::spec::SocketProbeSpec;
 
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
@@ -79,11 +81,14 @@ pub struct ExecutionResult {
 
 impl Executor {
     pub fn from_bytes(config: ExecutorConfig, bytes: &[u8]) -> Result<Self, RuntimeError> {
-        let program = binary::decode(bytes).map_err(|err| RuntimeError::Bytecode(err))?;
+        let program = binary::decode(bytes).map_err(RuntimeError::Bytecode)?;
         Self::from_bytecode(config, program)
     }
 
-    pub fn from_bytecode(config: ExecutorConfig, program: BytecodeProgram) -> Result<Self, RuntimeError> {
+    pub fn from_bytecode(
+        config: ExecutorConfig,
+        program: BytecodeProgram,
+    ) -> Result<Self, RuntimeError> {
         let client = build_client(
             Some(config.default_timeout),
             config.follow_redirect,
@@ -105,7 +110,10 @@ impl Executor {
         self.run_bytecode().await
     }
 
-    fn client_for_http(&self, spec: &crate::runtime::spec::HttpRequestSpec) -> Result<Client, RuntimeError> {
+    fn client_for_http(
+        &self,
+        spec: &crate::runtime::spec::HttpRequestSpec,
+    ) -> Result<Client, RuntimeError> {
         let verify_ssl = spec.verify_ssl.unwrap_or(self.config.verify_ssl);
         let follow_redirect = spec.follow_redirect.unwrap_or(self.config.follow_redirect);
         if verify_ssl == self.config.verify_ssl && follow_redirect == self.config.follow_redirect {
@@ -151,7 +159,8 @@ impl Executor {
                 }
                 Instr::SetList { name, start, len } => {
                     let name = &self.program.strings[*name as usize];
-                    let values = self.program.strings[*start as usize..(*start + *len as u32) as usize]
+                    let values = self.program.strings
+                        [*start as usize..(*start + *len as u32) as usize]
                         .iter()
                         .map(|value| interpolate(value, &context.variables))
                         .collect::<Result<Vec<_>, _>>()?;
@@ -160,8 +169,8 @@ impl Executor {
                 }
                 Instr::Send { probe, payload } => {
                     let name = &self.program.strings[*probe as usize];
-                    let payload_override = payload
-                        .map(|id| self.program.payloads[id as usize].clone());
+                    let payload_override =
+                        payload.map(|id| self.program.payloads[id as usize].clone());
                     tracing::trace!(probe = %name, "send");
                     self.send_probe(name, payload_override, &mut context)
                         .await?;
@@ -218,7 +227,8 @@ impl Executor {
                     end_pc,
                 } => {
                     let item = self.program.strings[*item as usize].clone();
-                    let values = self.program.strings[*start as usize..(*start + *len as u32) as usize]
+                    let values = self.program.strings
+                        [*start as usize..(*start + *len as u32) as usize]
                         .iter()
                         .map(|value| interpolate(value, &context.variables))
                         .collect::<Result<Vec<_>, _>>()?;
@@ -249,7 +259,7 @@ impl Executor {
                         Some(VariableValue::String(_)) => {
                             return Err(RuntimeError::Other(format!(
                                 "variable {list_name} is not a list"
-                            )))
+                            )));
                         }
                         None => Vec::new(),
                     };
@@ -334,7 +344,11 @@ impl Executor {
                             context.loop_stack.pop();
                             pc = end_pc;
                         }
-                        LoopAction::SetAndJump { item, value, head_pc } => {
+                        LoopAction::SetAndJump {
+                            item,
+                            value,
+                            head_pc,
+                        } => {
                             context.set_variable(item, value);
                             pc = head_pc;
                         }
@@ -473,9 +487,7 @@ impl Executor {
             .ok_or_else(|| RuntimeError::UnknownTarget(name.to_string()))?
             .clone();
 
-        let timeout = context
-            .retry_delay
-            .unwrap_or(self.config.default_timeout);
+        let timeout = context.retry_delay.unwrap_or(self.config.default_timeout);
 
         let response = match probe {
             ProbeKind::Http(spec) => {
@@ -505,24 +517,38 @@ impl Executor {
             }
             ProbeKind::Tcp(spec) => {
                 let spec = self.interpolate_socket_spec(&spec, context)?;
-                let port = spec.port.ok_or_else(|| {
-                    RuntimeError::Other(format!("tcp probe requires port"))
-                })?;
+                let port = spec
+                    .port
+                    .ok_or_else(|| RuntimeError::Other("tcp probe requires port".to_string()))?;
                 let payload = payload_override.or(spec.payload.clone());
                 ProbeResponse::Socket(
-                    self.exchange_tcp_probe(name, &spec, port, payload.as_deref(), timeout, context)
-                        .await?,
+                    self.exchange_tcp_probe(
+                        name,
+                        &spec,
+                        port,
+                        payload.as_deref(),
+                        timeout,
+                        context,
+                    )
+                    .await?,
                 )
             }
             ProbeKind::Udp(spec) => {
                 let spec = self.interpolate_socket_spec(&spec, context)?;
-                let port = spec.port.ok_or_else(|| {
-                    RuntimeError::Other(format!("udp probe requires port"))
-                })?;
+                let port = spec
+                    .port
+                    .ok_or_else(|| RuntimeError::Other("udp probe requires port".to_string()))?;
                 let payload = payload_override.or(spec.payload.clone());
                 ProbeResponse::Socket(
-                    self.exchange_udp_probe(name, &spec, port, payload.as_deref(), timeout, context)
-                        .await?,
+                    self.exchange_udp_probe(
+                        name,
+                        &spec,
+                        port,
+                        payload.as_deref(),
+                        timeout,
+                        context,
+                    )
+                    .await?,
                 )
             }
         };
@@ -530,15 +556,14 @@ impl Executor {
         log_probe_response(name, &response);
 
         let append_session = probe_session_enabled(name, &self.program.spec);
-        if append_session {
-            if let (ProbeResponse::Socket(chunk), Some(ProbeResponse::Socket(existing))) =
+        if append_session
+            && let (ProbeResponse::Socket(chunk), Some(ProbeResponse::Socket(existing))) =
                 (&response, context.responses.get(name))
-            {
-                let mut merged = existing.clone();
-                merged.data.extend_from_slice(&chunk.data);
-                context.store_response(name, ProbeResponse::Socket(merged));
-                return Ok(());
-            }
+        {
+            let mut merged = existing.clone();
+            merged.data.extend_from_slice(&chunk.data);
+            context.store_response(name, ProbeResponse::Socket(merged));
+            return Ok(());
         }
         context.store_response(name, response);
         Ok(())
@@ -558,8 +583,7 @@ impl Executor {
 
         if spec.session {
             if let Some(ProbeSession::Tcp(session)) = context.sessions.get_mut(name) {
-                let data =
-                    tcp_session_exchange(session, payload, &read, io_timeout).await?;
+                let data = tcp_session_exchange(session, payload, &read, io_timeout).await?;
                 return Ok(SocketResponse {
                     host: spec.host.clone(),
                     port,
@@ -652,9 +676,8 @@ impl Executor {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            RuntimeError::Other(format!("retry send failed for {name}"))
-        }))
+        Err(last_error
+            .unwrap_or_else(|| RuntimeError::Other(format!("retry send failed for {name}"))))
     }
 
     fn apply_match(&self, matcher_idx: usize, context: &mut Context) -> Result<(), RuntimeError> {
@@ -740,21 +763,28 @@ impl Executor {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
-                    name: target.clone(),
-                })?;
+                let http = response
+                    .as_http()
+                    .map_err(|_| RuntimeError::WrongProbeKind {
+                        name: target.clone(),
+                    })?;
                 match regex {
                     Some(pattern) => extract_regex(&http.body, pattern)?,
                     None => http.body.clone(),
                 }
             }
-            ExtractSource::Header { target, name: header } => {
+            ExtractSource::Header {
+                target,
+                name: header,
+            } => {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let http = response.as_http().map_err(|_| RuntimeError::WrongProbeKind {
-                    name: target.clone(),
-                })?;
+                let http = response
+                    .as_http()
+                    .map_err(|_| RuntimeError::WrongProbeKind {
+                        name: target.clone(),
+                    })?;
                 http.headers
                     .iter()
                     .find(|(key, _)| key.eq_ignore_ascii_case(header))
@@ -794,13 +824,13 @@ impl Executor {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                Ok(crate::util::truncate_str(&evidence_haystack(&response), 500))
+                Ok(crate::util::truncate_str(&evidence_haystack(response), 500))
             }
             EvidenceKind::Regex { target, pattern } => {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let haystack = evidence_haystack(&response);
+                let haystack = evidence_haystack(response);
                 extract_regex(&haystack, pattern).map_err(|_| {
                     RuntimeError::Other(format!(
                         "evidence regex on {target} did not match: {pattern}"
@@ -858,6 +888,37 @@ fn extract_regex(body: &str, pattern: &str) -> Result<String, RuntimeError> {
         });
     }
     Ok(matched)
+}
+
+fn log_probe_response(name: &str, response: &ProbeResponse) {
+    match response {
+        ProbeResponse::Http(http) => {
+            tracing::trace!(
+                probe = name,
+                status = http.status,
+                elapsed_ms = http.elapsed.as_millis() as u64,
+                body_bytes = http.body.len(),
+                "http response"
+            );
+        }
+        ProbeResponse::DnsResolve(dns) => {
+            tracing::trace!(
+                probe = name,
+                host = %dns.host,
+                answers = dns.answers.len(),
+                "dns resolve"
+            );
+        }
+        ProbeResponse::Socket(sock) => {
+            tracing::trace!(
+                probe = name,
+                host = %sock.host,
+                port = sock.port,
+                data_bytes = sock.data.len(),
+                "socket response"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -953,36 +1014,5 @@ mod tests {
         let result = executor.run().await.expect("metadata run");
         assert!(result.detected);
         assert_eq!(result.report.findings[0].name, "Metadata only");
-    }
-}
-
-fn log_probe_response(name: &str, response: &ProbeResponse) {
-    match response {
-        ProbeResponse::Http(http) => {
-            tracing::trace!(
-                probe = name,
-                status = http.status,
-                elapsed_ms = http.elapsed.as_millis() as u64,
-                body_bytes = http.body.len(),
-                "http response"
-            );
-        }
-        ProbeResponse::DnsResolve(dns) => {
-            tracing::trace!(
-                probe = name,
-                host = %dns.host,
-                answers = dns.answers.len(),
-                "dns resolve"
-            );
-        }
-        ProbeResponse::Socket(sock) => {
-            tracing::trace!(
-                probe = name,
-                host = %sock.host,
-                port = sock.port,
-                data_bytes = sock.data.len(),
-                "socket response"
-            );
-        }
     }
 }

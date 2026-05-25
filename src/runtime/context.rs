@@ -22,7 +22,9 @@ impl VariableValue {
 
 #[derive(Debug)]
 pub enum LoopState {
-    Repeat { remaining: u32 },
+    Repeat {
+        remaining: u32,
+    },
     ForEach {
         item: String,
         values: Vec<String>,
@@ -87,7 +89,8 @@ impl Context {
     }
 
     pub fn set_list_variable(&mut self, name: impl Into<String>, values: Vec<String>) {
-        self.variables.insert(name.into(), VariableValue::List(values));
+        self.variables
+            .insert(name.into(), VariableValue::List(values));
     }
 
     pub fn restore_or_remove_variable(
@@ -143,8 +146,10 @@ mod tests {
 
     #[test]
     fn finalize_emits_finding_when_matched() {
-        let mut ctx = Context::default();
-        ctx.matched = true;
+        let mut ctx = Context {
+            matched: true,
+            ..Context::default()
+        };
         ctx.metadata.name = Some("Exposed .env".into());
         ctx.metadata.severity = Some(Severity::High);
         ctx.evidence.push("DB_PASSWORD=secret".into());
@@ -156,8 +161,10 @@ mod tests {
 
     #[test]
     fn finalize_skips_when_match_chain_failed() {
-        let mut ctx = Context::default();
-        ctx.matched = false;
+        let mut ctx = Context {
+            matched: false,
+            ..Context::default()
+        };
         ctx.metadata.name = Some("Should not emit".into());
         ctx.finalize_finding();
         assert!(ctx.report.findings.is_empty());
@@ -165,9 +172,11 @@ mod tests {
 
     #[test]
     fn finalize_skips_after_stop() {
-        let mut ctx = Context::default();
-        ctx.matched = true;
-        ctx.emit_finding = false;
+        let mut ctx = Context {
+            matched: true,
+            emit_finding: false,
+            ..Context::default()
+        };
         ctx.metadata.name = Some("Stopped".into());
         ctx.finalize_finding();
         assert!(ctx.report.findings.is_empty());

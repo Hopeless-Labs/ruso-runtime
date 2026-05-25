@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-use crate::runtime::binary::BytecodeError;
 use crate::contract::QualifiedMatch;
+use crate::runtime::binary::BytecodeError;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {

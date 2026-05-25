@@ -1,5 +1,5 @@
-use crate::runtime::spec::CheckMetadata;
 use crate::contract::Severity;
+use crate::runtime::spec::CheckMetadata;
 
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -56,8 +56,8 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::spec::CheckMetadata;
     use crate::contract::Severity;
+    use crate::runtime::spec::CheckMetadata;
 
     use super::Finding;
 
@@ -69,8 +69,7 @@ mod tests {
             severity: Some(Severity::Medium),
             ..Default::default()
         };
-        let finding = Finding::from_metadata(&meta, vec!["proof".into()])
-            .expect("finding");
+        let finding = Finding::from_metadata(&meta, vec!["proof".into()]).expect("finding");
         assert_eq!(finding.name, "Check");
         assert_eq!(finding.severity, Severity::Medium);
         assert_eq!(finding.evidence, vec!["proof"]);

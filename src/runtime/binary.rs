@@ -4,13 +4,12 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
+use crate::contract::{
+    BodyValue, CmpOp, CmpValue, EvidenceKind, ExtractSource, FieldKind, HttpMethod, InlinePart,
+    InlinePartBody, MatchPredicate, ObjectBody, QualifiedField, QualifiedMatch, Severity,
+};
 use crate::runtime::bytecode::{BytecodeProgram, Instr};
 use crate::runtime::spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec};
-use crate::contract::{
-    BodyValue, CmpOp, CmpValue, EvidenceKind, ExtractSource, FieldKind, HttpMethod,
-    InlinePart, InlinePartBody, MatchPredicate, ObjectBody, QualifiedField, QualifiedMatch,
-    Severity,
-};
 
 pub const MAGIC: &[u8; 4] = b"RUSO";
 pub const VERSION: u8 = 1;
@@ -107,11 +106,8 @@ pub fn bytes_to_hex_dump(bytes: &[u8]) -> String {
 }
 
 pub fn hex_to_bytes(input: &str) -> Result<Vec<u8>, BytecodeError> {
-    let hex: String = input
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect();
-    if hex.len() % 2 != 0 {
+    let hex: String = input.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if !hex.len().is_multiple_of(2) {
         return Err(BytecodeError::InvalidHex("odd length".into()));
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
@@ -385,7 +381,9 @@ fn write_socket_probe(w: &mut Writer, spec: &crate::runtime::spec::SocketProbeSp
     w.u32(spec.read_idle_ms);
 }
 
-fn read_socket_probe(r: &mut Reader<'_>) -> Result<crate::runtime::spec::SocketProbeSpec, BytecodeError> {
+fn read_socket_probe(
+    r: &mut Reader<'_>,
+) -> Result<crate::runtime::spec::SocketProbeSpec, BytecodeError> {
     Ok(crate::runtime::spec::SocketProbeSpec {
         host: r.str()?,
         port: r.opt_u16()?,
@@ -1018,11 +1016,7 @@ fn read_instr(r: &mut Reader<'_>) -> Result<Instr, BytecodeError> {
         },
         OP_SEND => {
             let probe = r.u32()?;
-            let payload = if r.u8()? == 0 {
-                None
-            } else {
-                Some(r.u32()?)
-            };
+            let payload = if r.u8()? == 0 { None } else { Some(r.u32()?) };
             Instr::Send { probe, payload }
         }
         OP_MATCH => Instr::Match(r.u32()?),

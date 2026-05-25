@@ -1,7 +1,7 @@
 //! Executable bytecode produced from the script AST.
 
-use crate::runtime::spec::ProgramSpec;
 use crate::contract::{EvidenceKind, ExtractSource, QualifiedMatch};
+use crate::runtime::spec::ProgramSpec;
 
 /// Compiled script ready for the executor (probes, metadata, and instruction stream).
 #[derive(Debug, Clone)]

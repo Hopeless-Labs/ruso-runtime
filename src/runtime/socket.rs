@@ -3,8 +3,8 @@ use std::time::Duration;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::response::SocketResponse;
 use crate::runtime::session::{
-    open_tcp_session, open_udp_session, read_opts_from_spec, tcp_exchange, udp_exchange, ReadOpts,
-    TcpSession,
+    ReadOpts, TcpSession, open_tcp_session, open_udp_session, read_opts_from_spec, tcp_exchange,
+    udp_exchange,
 };
 use crate::runtime::spec::SocketProbeSpec;
 use tokio::net::UdpSocket;

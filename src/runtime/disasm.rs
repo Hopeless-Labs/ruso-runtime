@@ -2,12 +2,12 @@
 
 use std::fmt::Write as _;
 
-use crate::runtime::binary;
-use crate::runtime::bytecode::{BytecodeProgram, Instr};
-use crate::runtime::spec::ProbeKind;
 use crate::contract::{
     CmpOp, CmpValue, EvidenceKind, ExtractSource, FieldKind, MatchPredicate, QualifiedMatch,
 };
+use crate::runtime::binary;
+use crate::runtime::bytecode::{BytecodeProgram, Instr};
+use crate::runtime::spec::ProbeKind;
 
 pub fn format_human(bytecode: &BytecodeProgram) -> String {
     let mut out = String::new();
@@ -65,10 +65,7 @@ pub fn format_human(bytecode: &BytecodeProgram) -> String {
     out
 }
 
-fn format_metadata(
-    out: &mut String,
-    metadata: &crate::runtime::spec::CheckMetadata,
-) {
+fn format_metadata(out: &mut String, metadata: &crate::runtime::spec::CheckMetadata) {
     if let Some(name) = &metadata.name {
         writeln!(out, ";;   name: {name:?}").ok();
     }
@@ -124,7 +121,9 @@ fn format_socket_probe(label: &str, spec: &crate::runtime::spec::SocketProbeSpec
         line.push_str(&format!(" port={port}"));
     }
     if let Some(payload) = &spec.payload {
-        let shown = if payload.iter().all(|b| b.is_ascii_graphic() || *b == b' ' || *b == b'\r' || *b == b'\n' || *b == b'\t') {
+        let shown = if payload.iter().all(|b| {
+            b.is_ascii_graphic() || *b == b' ' || *b == b'\r' || *b == b'\n' || *b == b'\t'
+        }) {
             format!("{payload:?}")
         } else {
             format!("0x{}", crate::runtime::binary::bytes_to_hex(payload))
@@ -238,7 +237,11 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
             format!("Set name={} value={}", str_at(*name), str_at(*value))
         }
         Instr::SetList { name, start, len } => {
-            format!("SetList name={} values=[{}]", str_at(*name), string_span(*start, *len))
+            format!(
+                "SetList name={} values=[{}]",
+                str_at(*name),
+                string_span(*start, *len)
+            )
         }
         Instr::Send { probe, payload } => {
             if let Some(id) = payload {
@@ -277,7 +280,11 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
             string_span(*start, *len)
         ),
         Instr::ForVar { item, list, end_pc } => {
-            format!("ForVar item={} list={} end_pc={end_pc}", str_at(*item), str_at(*list))
+            format!(
+                "ForVar item={} list={} end_pc={end_pc}",
+                str_at(*item),
+                str_at(*list)
+            )
         }
         Instr::LoopBack => "LoopBack".into(),
         Instr::Break => "Break".into(),
@@ -296,4 +303,3 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
         Instr::Exit => "Exit".into(),
     }
 }
-

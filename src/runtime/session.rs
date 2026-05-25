@@ -62,12 +62,9 @@ pub async fn open_tcp_session(
     let connector = TlsConnector::from(Arc::new(config));
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| RuntimeError::Other(format!("invalid tls server name: {host}")))?;
-    let tls_stream = timeout(
-        connect_timeout,
-        connector.connect(server_name, stream),
-    )
-    .await
-    .map_err(|_| RuntimeError::Other(format!("tls handshake timeout: {address}")))??;
+    let tls_stream = timeout(connect_timeout, connector.connect(server_name, stream))
+        .await
+        .map_err(|_| RuntimeError::Other(format!("tls handshake timeout: {address}")))??;
 
     Ok(TcpSession::Tls(Box::new(tls_stream)))
 }
@@ -113,7 +110,11 @@ pub async fn udp_exchange(
     read_udp(socket, read, io_timeout).await
 }
 
-async fn write_tcp(session: &mut TcpSession, payload: &[u8], io_timeout: Duration) -> Result<(), RuntimeError> {
+async fn write_tcp(
+    session: &mut TcpSession,
+    payload: &[u8],
+    io_timeout: Duration,
+) -> Result<(), RuntimeError> {
     match session {
         TcpSession::Plain(stream) => {
             timeout(io_timeout, stream.write_all(payload))
@@ -129,14 +130,22 @@ async fn write_tcp(session: &mut TcpSession, payload: &[u8], io_timeout: Duratio
     Ok(())
 }
 
-async fn read_tcp(session: &mut TcpSession, read: &ReadOpts, io_timeout: Duration) -> Result<Vec<u8>, RuntimeError> {
+async fn read_tcp(
+    session: &mut TcpSession,
+    read: &ReadOpts,
+    io_timeout: Duration,
+) -> Result<Vec<u8>, RuntimeError> {
     match session {
         TcpSession::Plain(stream) => read_stream_plain(stream, read, io_timeout).await,
         TcpSession::Tls(stream) => read_stream_tls(stream, read, io_timeout).await,
     }
 }
 
-async fn read_udp(socket: &UdpSocket, read: &ReadOpts, io_timeout: Duration) -> Result<Vec<u8>, RuntimeError> {
+async fn read_udp(
+    socket: &UdpSocket,
+    read: &ReadOpts,
+    io_timeout: Duration,
+) -> Result<Vec<u8>, RuntimeError> {
     let mut out = Vec::new();
     let mut buffer = vec![0u8; 4096.min(read.max_bytes.max(1))];
     let idle = Duration::from_millis(read.idle_ms as u64);

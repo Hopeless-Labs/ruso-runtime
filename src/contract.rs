@@ -87,10 +87,7 @@ pub struct QualifiedMatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchPredicate {
-    Compare {
-        op: CmpOp,
-        value: CmpValue,
-    },
+    Compare { op: CmpOp, value: CmpValue },
     Contains(String),
     NotContains(String),
     Regex(String),

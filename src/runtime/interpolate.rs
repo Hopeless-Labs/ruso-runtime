@@ -12,13 +12,15 @@ pub fn interpolate(
     let mut index = 0;
 
     while index < bytes.len() {
-        if bytes[index] == b'{' && index + 1 < bytes.len() && bytes[index + 1] == b'{' {
-            if let Some((end, name)) = parse_placeholder(&template[index + 2..]) {
-                let value = resolve_scalar(&name, variables)?;
-                output.push_str(&value);
-                index += 2 + end;
-                continue;
-            }
+        if bytes[index] == b'{'
+            && index + 1 < bytes.len()
+            && bytes[index + 1] == b'{'
+            && let Some((end, name)) = parse_placeholder(&template[index + 2..])
+        {
+            let value = resolve_scalar(&name, variables)?;
+            output.push_str(&value);
+            index += 2 + end;
+            continue;
         }
         let ch = template[index..].chars().next().unwrap();
         output.push(ch);

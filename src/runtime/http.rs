@@ -5,15 +5,15 @@ use futures::StreamExt;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Method, RequestBuilder};
 
+use crate::contract::HttpMethod;
 use crate::runtime::body::{object_to_form, object_to_json, object_to_multipart};
-use crate::runtime::context::VariableValue;
 use crate::runtime::bytes::decode_hex;
+use crate::runtime::context::VariableValue;
 use crate::runtime::duration::parse_duration;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::interpolate::interpolate;
 use crate::runtime::response::HttpResponse;
 use crate::runtime::spec::HttpRequestSpec;
-use crate::contract::HttpMethod;
 
 pub async fn execute_http(
     client: &Client,
@@ -25,11 +25,7 @@ pub async fn execute_http(
     let path = interpolate(&spec.path, variables)?;
     let url = join_url(base_url, &path);
     let method = to_reqwest_method(&spec.method);
-    let timeout = spec
-        .timeout
-        .as_deref()
-        .map(parse_duration)
-        .transpose()?;
+    let timeout = spec.timeout.as_deref().map(parse_duration).transpose()?;
 
     tracing::debug!(%url, ?method, "http request");
 
@@ -65,7 +61,10 @@ pub async fn execute_http(
             .queries
             .iter()
             .map(|(name, value)| {
-                Ok((interpolate(name, variables)?, interpolate(value, variables)?))
+                Ok((
+                    interpolate(name, variables)?,
+                    interpolate(value, variables)?,
+                ))
             })
             .collect::<Result<_, RuntimeError>>()?;
         builder = builder.query(&pairs);
