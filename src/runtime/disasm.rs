@@ -102,6 +102,9 @@ fn format_metadata(out: &mut String, metadata: &crate::runtime::spec::CheckMetad
     for mitigation in &metadata.mitigation {
         writeln!(out, ";;   mitigation: {mitigation:?}").ok();
     }
+    for tag in &metadata.tags {
+        writeln!(out, ";;   tag: {tag:?}").ok();
+    }
 }
 
 fn format_probe_kind(kind: &ProbeKind) -> String {

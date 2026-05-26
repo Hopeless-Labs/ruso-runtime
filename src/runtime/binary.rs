@@ -339,6 +339,7 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     write_strings(w, &metadata.cvss);
     write_strings(w, &metadata.cvss_score);
     write_strings(w, &metadata.mitigation);
+    write_strings(w, &metadata.tags);
 }
 
 fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
@@ -359,6 +360,7 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
         cvss: read_strings(r)?,
         cvss_score: read_strings(r)?,
         mitigation: read_strings(r)?,
+        tags: read_strings(r)?,
     })
 }
 
@@ -1314,6 +1316,33 @@ mod tests {
     fn decode_rejects_bad_magic() {
         let buf = [0u8, 0u8, 0u8, 0u8, VERSION];
         assert!(matches!(decode(&buf), Err(BytecodeError::BadMagic)));
+    }
+
+    #[test]
+    fn metadata_roundtrip_preserves_tags_and_lists() {
+        let metadata = CheckMetadata {
+            name: Some("Check".into()),
+            description: None,
+            impact: None,
+            severity: Some(Severity::High),
+            author: None,
+            report_title: None,
+            cve: vec!["CVE-2024-1".into()],
+            cwe: vec!["CWE-79".into()],
+            references: vec!["https://example.com".into()],
+            cvss: vec![],
+            cvss_score: vec![],
+            mitigation: vec!["patch".into()],
+            tags: vec!["auth".into(), "rce".into()],
+        };
+        let mut w = Writer::default();
+        write_metadata(&mut w, &metadata);
+        let mut r = Reader::new(&w.0);
+        let decoded = read_metadata(&mut r).unwrap();
+        assert_eq!(decoded.tags, vec!["auth", "rce"]);
+        assert_eq!(decoded.cve, vec!["CVE-2024-1"]);
+        assert_eq!(decoded.mitigation, vec!["patch"]);
+        assert_eq!(decoded.severity, Some(Severity::High));
     }
 
     #[test]

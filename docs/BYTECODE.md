@@ -180,6 +180,7 @@ Written in order after the header (`MAGIC` + `VERSION`):
 | `cvss` | `u32` count + strings (vector) |
 | `cvss_score` | `u32` count + strings (numeric score) |
 | `mitigation` | `u32` count + strings |
+| `tags` | `u32` count + strings (discovery labels) |
 
 Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable metadata lines in `.ruso` append to these lists at compile time.
 
