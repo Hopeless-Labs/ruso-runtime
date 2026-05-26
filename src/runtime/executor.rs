@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use reqwest::Client;
@@ -13,7 +14,7 @@ use crate::runtime::duration::parse_duration;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::http::{build_client, execute_http};
 use crate::runtime::interpolate::interpolate;
-use crate::runtime::matcher::{evaluate, evaluate_all, evaluate_any};
+use crate::runtime::matcher::{CompiledMatcherRegex, evaluate, evaluate_all, evaluate_any};
 use crate::runtime::port_cache::{PortCache, PortCheck, scan_target_host_port};
 use crate::runtime::report::Report;
 use crate::runtime::response::ProbeResponse;
@@ -40,8 +41,16 @@ pub struct ExecutorConfig {
     /// or misconfigured targets.
     pub max_response_bytes: usize,
     pub follow_redirect: bool,
+    /// Verify TLS server certificates. Default is `true`; set to `false`
+    /// (CLI `--insecure`) only for explicitly trusted scan environments —
+    /// otherwise the scanner is exposed to MITM that can plant findings
+    /// or read in-flight credentials.
     pub verify_ssl: bool,
     pub proxy: Option<String>,
+    /// Wall-clock budget for a single script execution. `None` disables.
+    /// Defaults to 5 minutes so a hostile/buggy bytecode (`repeat u32::MAX
+    /// { sleep 1ms }`, deep loops, etc.) cannot pin a tokio worker.
+    pub max_script_duration: Option<Duration>,
 }
 
 impl Default for ExecutorConfig {
@@ -52,16 +61,30 @@ impl Default for ExecutorConfig {
             read_timeout: Duration::from_secs(10),
             max_response_bytes: 10 * 1024 * 1024, // 10 MiB
             follow_redirect: true,
-            verify_ssl: false,
+            verify_ssl: true,
             proxy: None,
+            max_script_duration: Some(Duration::from_secs(300)),
         }
     }
 }
 
 pub struct Executor {
     config: ExecutorConfig,
-    program: BytecodeProgram,
+    /// Program shared via `Arc` so the same compiled script can run against
+    /// many targets without cloning the bytecode (string pool, payload pool,
+    /// matcher pool, etc.) for each.
+    program: Arc<BytecodeProgram>,
     client: Client,
+    /// Pre-compiled regexes aligned by index with `program.matchers`. Built
+    /// once at executor construction so per-run / per-loop-iteration matcher
+    /// dispatch never pays the regex compile cost again.
+    compiled_matcher_regex: Arc<[CompiledMatcherRegex]>,
+    /// Pre-compiled regexes for `EvidenceKind::Regex`, aligned with
+    /// `program.evidence`. `None` for non-regex evidence kinds.
+    compiled_evidence_regex: Arc<[Option<Regex>]>,
+    /// Pre-compiled regexes for `ExtractSource::Body { regex: Some(...) }`,
+    /// aligned with `program.extracts`.
+    compiled_extract_regex: Arc<[Option<Regex>]>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,16 +112,58 @@ impl Executor {
         config: ExecutorConfig,
         program: BytecodeProgram,
     ) -> Result<Self, RuntimeError> {
+        Self::from_program(config, Arc::new(program))
+    }
+
+    /// Construct an executor sharing a pre-built `Arc<BytecodeProgram>`.
+    ///
+    /// Prefer this over [`Executor::from_bytecode`] when a single compiled
+    /// script is run against many targets: the program (and the regex caches
+    /// derived from it) are cloned via `Arc` rather than deep-copied.
+    pub fn from_program(
+        config: ExecutorConfig,
+        program: Arc<BytecodeProgram>,
+    ) -> Result<Self, RuntimeError> {
         let client = build_client(
             Some(config.default_timeout),
             config.follow_redirect,
             config.verify_ssl,
             config.proxy.as_deref(),
         )?;
+        let compiled_matcher_regex: Arc<[CompiledMatcherRegex]> = program
+            .matchers
+            .iter()
+            .map(CompiledMatcherRegex::compile)
+            .collect::<Result<Vec<_>, _>>()?
+            .into();
+        let compiled_evidence_regex: Arc<[Option<Regex>]> = program
+            .evidence
+            .iter()
+            .map(|kind| match kind {
+                EvidenceKind::Regex { pattern, .. } => Regex::new(pattern).map(Some),
+                _ => Ok(None),
+            })
+            .collect::<Result<Vec<_>, regex::Error>>()?
+            .into();
+        let compiled_extract_regex: Arc<[Option<Regex>]> = program
+            .extracts
+            .iter()
+            .map(|src| match src {
+                ExtractSource::Body {
+                    regex: Some(pattern),
+                    ..
+                } => Regex::new(pattern).map(Some),
+                _ => Ok(None),
+            })
+            .collect::<Result<Vec<_>, regex::Error>>()?
+            .into();
         Ok(Self {
             config,
             program,
             client,
+            compiled_matcher_regex,
+            compiled_evidence_regex,
+            compiled_extract_regex,
         })
     }
 
@@ -148,8 +213,18 @@ impl Executor {
         let mut context = Context::from_spec(&self.program.spec);
         inject_scan_target_variables(&mut context, &self.config.base_url);
         let mut pc: usize = 0;
+        let started_at = Instant::now();
+        let budget = self.config.max_script_duration;
 
         while pc < self.program.code.len() {
+            if let Some(limit) = budget
+                && started_at.elapsed() > limit
+            {
+                return Err(RuntimeError::Other(format!(
+                    "script execution exceeded budget of {:?}",
+                    limit
+                )));
+            }
             match &self.program.code[pc] {
                 Instr::Set { name, value } => {
                     let name = &self.program.strings[*name as usize];
@@ -195,8 +270,9 @@ impl Executor {
                 Instr::Extract { name, source } => {
                     if context.matched {
                         let name = &self.program.strings[*name as usize];
-                        let source = &self.program.extracts[*source as usize];
-                        self.extract(name, source, &mut context)?;
+                        let source_idx = *source as usize;
+                        let source = &self.program.extracts[source_idx];
+                        self.extract(name, source, source_idx, &mut context)?;
                     }
                     pc += 1;
                 }
@@ -384,8 +460,9 @@ impl Executor {
                         pc += 1;
                         continue;
                     }
-                    let kind = &self.program.evidence[*kind as usize];
-                    let text = self.collect_evidence(kind, &context)?;
+                    let kind_idx = *kind as usize;
+                    let kind = &self.program.evidence[kind_idx];
+                    let text = self.collect_evidence(kind, kind_idx, &context)?;
                     context.evidence.push(text);
                     pc += 1;
                 }
@@ -487,7 +564,11 @@ impl Executor {
             .ok_or_else(|| RuntimeError::UnknownTarget(name.to_string()))?
             .clone();
 
-        let timeout = context.retry_delay.unwrap_or(self.config.default_timeout);
+        // `retry_delay` is the wait *between* retry attempts (used only in
+        // `retry_send` below). Earlier revisions piped it in here as the
+        // connect timeout, which made a `retry_delay 1s` directive silently
+        // shrink every subsequent probe's connect timeout to 1s.
+        let timeout = self.config.default_timeout;
 
         let response = match probe {
             ProbeKind::Http(spec) => {
@@ -704,7 +785,8 @@ impl Executor {
             return Ok(());
         }
         let matchers = &self.program.matchers[start..start + len];
-        if !evaluate_all(matchers, &context.responses)? {
+        let compiled = &self.compiled_matcher_regex[start..start + len];
+        if !evaluate_all(matchers, compiled, &context.responses)? {
             tracing::trace!(count = len, "match all failed");
             context.matched = false;
         } else {
@@ -723,7 +805,8 @@ impl Executor {
             return Ok(());
         }
         let matchers = &self.program.matchers[start..start + len];
-        if !evaluate_any(matchers, &context.responses)? {
+        let compiled = &self.compiled_matcher_regex[start..start + len];
+        if !evaluate_any(matchers, compiled, &context.responses)? {
             tracing::trace!(count = len, "match any failed");
             context.matched = false;
         } else {
@@ -749,13 +832,14 @@ impl Executor {
         let response = context
             .response(&matcher.field.target)
             .ok_or_else(|| RuntimeError::UnknownTarget(matcher.field.target.clone()))?;
-        evaluate(matcher, response)
+        evaluate(matcher, response, &self.compiled_matcher_regex[matcher_idx])
     }
 
     fn extract(
         &self,
         name: &str,
         source: &ExtractSource,
+        source_idx: usize,
         context: &mut Context,
     ) -> Result<(), RuntimeError> {
         let value = match source {
@@ -769,7 +853,16 @@ impl Executor {
                         name: target.clone(),
                     })?;
                 match regex {
-                    Some(pattern) => extract_regex(&http.body, pattern)?,
+                    Some(_) => {
+                        let compiled = self.compiled_extract_regex[source_idx]
+                            .as_ref()
+                            .ok_or_else(|| {
+                                RuntimeError::Other(
+                                    "extract regex missing pre-compiled entry".into(),
+                                )
+                            })?;
+                        extract_with_compiled(&http.body, compiled)?
+                    }
                     None => http.body.clone(),
                 }
             }
@@ -785,15 +878,30 @@ impl Executor {
                     .map_err(|_| RuntimeError::WrongProbeKind {
                         name: target.clone(),
                     })?;
-                http.headers
+                // Empty-string and missing-header used to collapse into the
+                // same "empty result" error. Distinguish them: a present but
+                // empty header is a legitimate value to capture; only an
+                // absent header is an extraction failure.
+                match http
+                    .headers
                     .iter()
                     .find(|(key, _)| key.eq_ignore_ascii_case(header))
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_default()
+                {
+                    Some((_, value)) => value.clone(),
+                    None => {
+                        return Err(RuntimeError::ExtractFailed {
+                            name: name.to_string(),
+                            reason: format!("header `{header}` not present"),
+                        });
+                    }
+                }
             }
         };
 
-        if value.is_empty() {
+        // Body extracts: an empty extract is still a failure (the regex
+        // matched zero characters). Header extracts that resolved to an
+        // empty value have already returned above; that path is preserved.
+        if matches!(source, ExtractSource::Body { .. }) && value.is_empty() {
             return Err(RuntimeError::ExtractFailed {
                 name: name.to_string(),
                 reason: "empty result".into(),
@@ -808,6 +916,7 @@ impl Executor {
     fn collect_evidence(
         &self,
         kind: &EvidenceKind,
+        kind_idx: usize,
         context: &Context,
     ) -> Result<String, RuntimeError> {
         match kind {
@@ -831,7 +940,13 @@ impl Executor {
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
                 let haystack = evidence_haystack(response);
-                extract_regex(&haystack, pattern).map_err(|_| {
+                let compiled =
+                    self.compiled_evidence_regex[kind_idx]
+                        .as_ref()
+                        .ok_or_else(|| {
+                            RuntimeError::Other("evidence regex missing pre-compiled entry".into())
+                        })?;
+                extract_with_compiled(&haystack, compiled).map_err(|_| {
                     RuntimeError::Other(format!(
                         "evidence regex on {target} did not match: {pattern}"
                     ))
@@ -868,13 +983,15 @@ fn probe_session_enabled(name: &str, spec: &crate::runtime::spec::ProgramSpec) -
     })
 }
 
-fn extract_regex(body: &str, pattern: &str) -> Result<String, RuntimeError> {
-    let regex = Regex::new(pattern)?;
+/// Run a pre-compiled regex against `body`, returning the first capture group
+/// (or the full match if there is no capture). Compiled once at executor init
+/// rather than on every call site.
+fn extract_with_compiled(body: &str, regex: &Regex) -> Result<String, RuntimeError> {
     let captures = regex
         .captures(body)
         .ok_or_else(|| RuntimeError::ExtractFailed {
             name: "regex".into(),
-            reason: format!("pattern not found: {pattern}"),
+            reason: format!("pattern not found: {}", regex.as_str()),
         })?;
     let matched = captures
         .get(1)
@@ -884,7 +1001,7 @@ fn extract_regex(body: &str, pattern: &str) -> Result<String, RuntimeError> {
     if matched.is_empty() {
         return Err(RuntimeError::ExtractFailed {
             name: "regex".into(),
-            reason: format!("empty capture for: {pattern}"),
+            reason: format!("empty capture for: {}", regex.as_str()),
         });
     }
     Ok(matched)
@@ -1014,5 +1131,52 @@ mod tests {
         let result = executor.run().await.expect("metadata run");
         assert!(result.detected);
         assert_eq!(result.report.findings[0].name, "Metadata only");
+    }
+
+    /// H6 regression: a script that does nothing but sleep in a `Repeat`
+    /// loop must terminate via the wall-clock budget rather than running
+    /// to completion (which, at `u32::MAX` iterations, would never happen).
+    #[tokio::test]
+    async fn script_budget_aborts_runaway_repeat_sleep() {
+        let bytecode = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            // strings[0] = "10ms" — duration for Sleep
+            code: vec![
+                Instr::Repeat {
+                    count: u32::MAX,
+                    end_pc: 3,
+                },
+                Instr::Sleep(0),
+                Instr::LoopBack,
+            ],
+            strings: vec!["10ms".into()],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let config = ExecutorConfig {
+            base_url: "http://127.0.0.1".into(),
+            // Tight budget so the test finishes quickly.
+            max_script_duration: Some(Duration::from_millis(50)),
+            ..ExecutorConfig::default()
+        };
+        let executor = Executor::from_bytecode(config, bytecode).unwrap();
+        let err = executor.run().await.expect_err("budget should fire");
+        let msg = err.to_string();
+        assert!(msg.contains("budget"), "expected budget error, got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn default_config_verifies_tls() {
+        // C3 regression: ExecutorConfig::default() must verify TLS so a
+        // freshly-constructed runtime cannot silently fall back to
+        // accept-invalid-certs.
+        let cfg = ExecutorConfig::default();
+        assert!(cfg.verify_ssl);
+        assert!(cfg.max_script_duration.is_some());
     }
 }

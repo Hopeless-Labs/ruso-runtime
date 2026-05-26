@@ -3,28 +3,40 @@ use std::collections::HashMap;
 use crate::runtime::context::VariableValue;
 use crate::runtime::error::RuntimeError;
 
+/// Expand `{{ name }}` placeholders in `template` using the runtime's
+/// variable map.
+///
+/// The previous implementation reissued `template[index..].chars().next()`
+/// on each step, which is O(n) per call and turned the loop quadratic on
+/// large bodies. We now walk a `char_indices` iterator once.
 pub fn interpolate(
     template: &str,
     variables: &HashMap<String, VariableValue>,
 ) -> Result<String, RuntimeError> {
     let mut output = String::with_capacity(template.len());
     let bytes = template.as_bytes();
-    let mut index = 0;
+    let mut chars = template.char_indices().peekable();
 
-    while index < bytes.len() {
-        if bytes[index] == b'{'
+    while let Some((index, ch)) = chars.next() {
+        if ch == '{'
             && index + 1 < bytes.len()
             && bytes[index + 1] == b'{'
             && let Some((end, name)) = parse_placeholder(&template[index + 2..])
         {
             let value = resolve_scalar(&name, variables)?;
             output.push_str(&value);
-            index += 2 + end;
+            // Advance the iterator past the closing `}}`. `end` is the
+            // byte offset (relative to `index+2`) just past the `}}`.
+            let target = index + 2 + end;
+            while let Some(&(next_index, _)) = chars.peek() {
+                if next_index >= target {
+                    break;
+                }
+                chars.next();
+            }
             continue;
         }
-        let ch = template[index..].chars().next().unwrap();
         output.push(ch);
-        index += ch.len_utf8();
     }
 
     Ok(output)
@@ -67,13 +79,48 @@ fn is_ident(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn vars(entries: &[(&str, &str)]) -> HashMap<String, VariableValue> {
+        entries
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), VariableValue::String((*v).to_string())))
+            .collect()
+    }
+
     #[test]
     fn replaces_variables() {
-        let mut vars = HashMap::new();
-        vars.insert("token".into(), VariableValue::String("abc".into()));
-        assert_eq!(
-            interpolate("Bearer {{ token }}", &vars).unwrap(),
-            "Bearer abc"
+        let v = vars(&[("token", "abc")]);
+        assert_eq!(interpolate("Bearer {{ token }}", &v).unwrap(), "Bearer abc");
+    }
+
+    #[test]
+    fn handles_multi_byte_template_without_quadratic_blowup() {
+        // Smoke test: a long UTF-8 template with no placeholders must
+        // complete (the old impl ran O(n^2) but still finished — we want
+        // a regression check that the new iterator is correct).
+        let template = "日本語テキストが長く続きます".repeat(200);
+        let out = interpolate(&template, &HashMap::new()).unwrap();
+        assert_eq!(out, template);
+    }
+
+    #[test]
+    fn missing_variable_expands_to_empty() {
+        let out = interpolate("[{{ absent }}]", &HashMap::new()).unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn unclosed_placeholder_is_left_literal() {
+        let out = interpolate("{{ token", &HashMap::new()).unwrap();
+        assert_eq!(out, "{{ token");
+    }
+
+    #[test]
+    fn list_variable_is_rejected() {
+        let mut v = HashMap::new();
+        v.insert(
+            "items".to_string(),
+            VariableValue::List(vec!["a".into(), "b".into()]),
         );
+        assert!(interpolate("{{ items }}", &v).is_err());
     }
 }

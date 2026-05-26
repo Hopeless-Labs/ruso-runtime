@@ -9,6 +9,7 @@ use tokio_rustls::TlsConnector;
 use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::runtime::error::RuntimeError;
+use crate::runtime::port_cache::format_socket_addr;
 use crate::runtime::spec::SocketProbeSpec;
 
 pub struct ReadOpts {
@@ -36,7 +37,7 @@ pub async fn open_tcp_session(
     verify_ssl: bool,
     connect_timeout: Duration,
 ) -> Result<TcpSession, RuntimeError> {
-    let address = format!("{host}:{port}");
+    let address = format_socket_addr(host, port);
     let stream = timeout(connect_timeout, TcpStream::connect(&address))
         .await
         .map_err(|_| RuntimeError::Other(format!("tcp connect timeout: {address}")))??;
@@ -74,8 +75,15 @@ pub async fn open_udp_session(
     port: u16,
     connect_timeout: Duration,
 ) -> Result<UdpSocket, RuntimeError> {
-    let address = format!("{host}:{port}");
-    let socket = timeout(connect_timeout, UdpSocket::bind("0.0.0.0:0"))
+    let address = format_socket_addr(host, port);
+    // Bind on the address family that matches the remote — using
+    // `0.0.0.0:0` for an IPv6 target would refuse connect with `EINVAL`.
+    let bind_addr = if address.starts_with('[') {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let socket = timeout(connect_timeout, UdpSocket::bind(bind_addr))
         .await
         .map_err(|_| RuntimeError::Other("udp bind timeout".into()))??;
     timeout(connect_timeout, socket.connect(&address))

@@ -5,7 +5,45 @@ use crate::contract::{CmpOp, CmpValue, FieldKind, MatchPredicate, QualifiedMatch
 use crate::runtime::error::RuntimeError;
 use crate::runtime::response::ProbeResponse;
 
-pub fn evaluate(matcher: &QualifiedMatch, response: &ProbeResponse) -> Result<bool, RuntimeError> {
+/// Pre-compiled regex for a single matcher slot. Aligned by index with
+/// `BytecodeProgram::matchers` so the executor can compile every regex once
+/// up-front and reuse it across every run / every loop iteration.
+#[derive(Debug, Clone)]
+pub enum CompiledMatcherRegex {
+    /// Matcher does not use `regex` (Compare/Contains/NotContains/...), or its
+    /// field kind has no regex variant.
+    None,
+    /// Regex against an HTTP body (`http_probe.body regex '...'`). The body
+    /// is decoded as a `String`, so the text-flavor `Regex` is fine.
+    HttpBody(Regex),
+    /// Regex against raw socket bytes (`tcp_probe.response regex '...'`).
+    /// Uses the `bytes` flavor so patterns can match non-UTF-8 payloads.
+    SocketBytes(BytesRegex),
+}
+
+impl CompiledMatcherRegex {
+    /// Compile the regex stored in `matcher` if its predicate is `Regex(...)`,
+    /// dispatching to text vs bytes flavor based on field kind.
+    pub fn compile(matcher: &QualifiedMatch) -> Result<Self, RuntimeError> {
+        match (&matcher.field.kind, &matcher.predicate) {
+            (FieldKind::Body, MatchPredicate::Regex(pattern)) => {
+                Ok(Self::HttpBody(Regex::new(pattern)?))
+            }
+            (FieldKind::Response | FieldKind::Banner, MatchPredicate::Regex(pattern)) => {
+                Ok(Self::SocketBytes(BytesRegex::new(pattern)?))
+            }
+            _ => Ok(Self::None),
+        }
+    }
+}
+
+/// Evaluate a single matcher against a probe response, using a pre-compiled
+/// regex when the predicate is `Regex(...)`.
+pub fn evaluate(
+    matcher: &QualifiedMatch,
+    response: &ProbeResponse,
+    compiled_regex: &CompiledMatcherRegex,
+) -> Result<bool, RuntimeError> {
     let field = &matcher.field;
     let predicate = &matcher.predicate;
 
@@ -34,13 +72,17 @@ pub fn evaluate(matcher: &QualifiedMatch, response: &ProbeResponse) -> Result<bo
                 })?;
             Ok(!http.body.contains(text))
         }
-        (FieldKind::Body, MatchPredicate::Regex(pattern)) => {
+        (FieldKind::Body, MatchPredicate::Regex(_)) => {
             let http = response
                 .as_http()
                 .map_err(|_| RuntimeError::WrongProbeKind {
                     name: field.target.clone(),
                 })?;
-            let regex = Regex::new(pattern)?;
+            let CompiledMatcherRegex::HttpBody(regex) = compiled_regex else {
+                return Err(RuntimeError::Other(
+                    "regex matcher missing pre-compiled http body regex".into(),
+                ));
+            };
             Ok(regex.is_match(&http.body))
         }
         (FieldKind::Header(name), MatchPredicate::Contains(text)) => {
@@ -105,13 +147,17 @@ pub fn evaluate(matcher: &QualifiedMatch, response: &ProbeResponse) -> Result<bo
                 _ => unreachable!(),
             }
         }
-        (FieldKind::Response | FieldKind::Banner, MatchPredicate::Regex(pattern)) => {
+        (FieldKind::Response | FieldKind::Banner, MatchPredicate::Regex(_)) => {
             let data = socket_bytes(response).map_err(|_| RuntimeError::WrongProbeKind {
                 name: field.target.clone(),
             })?;
             // Use the bytes regex flavor so patterns can target non-UTF-8
             // banners (binary protocols, control bytes, etc.).
-            let regex = BytesRegex::new(pattern)?;
+            let CompiledMatcherRegex::SocketBytes(regex) = compiled_regex else {
+                return Err(RuntimeError::Other(
+                    "regex matcher missing pre-compiled socket bytes regex".into(),
+                ));
+            };
             Ok(regex.is_match(data))
         }
         _ => Err(RuntimeError::Other(format!(
@@ -123,13 +169,14 @@ pub fn evaluate(matcher: &QualifiedMatch, response: &ProbeResponse) -> Result<bo
 
 pub fn evaluate_all(
     matchers: &[QualifiedMatch],
+    compiled: &[CompiledMatcherRegex],
     responses: &std::collections::HashMap<String, ProbeResponse>,
 ) -> Result<bool, RuntimeError> {
-    for matcher in matchers {
+    for (matcher, regex) in matchers.iter().zip(compiled.iter()) {
         let response = responses
             .get(&matcher.field.target)
             .ok_or_else(|| RuntimeError::UnknownTarget(matcher.field.target.clone()))?;
-        if !evaluate(matcher, response)? {
+        if !evaluate(matcher, response, regex)? {
             return Ok(false);
         }
     }
@@ -138,13 +185,14 @@ pub fn evaluate_all(
 
 pub fn evaluate_any(
     matchers: &[QualifiedMatch],
+    compiled: &[CompiledMatcherRegex],
     responses: &std::collections::HashMap<String, ProbeResponse>,
 ) -> Result<bool, RuntimeError> {
-    for matcher in matchers {
+    for (matcher, regex) in matchers.iter().zip(compiled.iter()) {
         let response = responses
             .get(&matcher.field.target)
             .ok_or_else(|| RuntimeError::UnknownTarget(matcher.field.target.clone()))?;
-        if evaluate(matcher, response)? {
+        if evaluate(matcher, response, regex)? {
             return Ok(true);
         }
     }
@@ -219,7 +267,7 @@ fn compare_duration_ms(actual_ms: u64, op: CmpOp, value: &CmpValue) -> Result<bo
 
 #[cfg(test)]
 mod tests {
-    use super::{bytes_contains, evaluate};
+    use super::{CompiledMatcherRegex, bytes_contains, evaluate};
     use crate::contract::{FieldKind, MatchPredicate, QualifiedField, QualifiedMatch};
     use crate::runtime::response::{ProbeResponse, SocketResponse};
 
@@ -274,7 +322,8 @@ mod tests {
         ];
         let response = socket_response_with(banner);
         let matcher = matcher_response_contains("SSH-2.0-");
-        assert!(evaluate(&matcher, &response).unwrap());
+        // Non-regex predicates don't need a compiled regex; pass None-variant.
+        assert!(evaluate(&matcher, &response, &CompiledMatcherRegex::None).unwrap());
     }
 
     #[test]
@@ -292,6 +341,56 @@ mod tests {
             },
             predicate: MatchPredicate::Regex(r"AB(?-u:.)C".into()),
         };
-        assert!(evaluate(&matcher, &response).unwrap());
+        let compiled = CompiledMatcherRegex::compile(&matcher).unwrap();
+        assert!(evaluate(&matcher, &response, &compiled).unwrap());
+    }
+
+    #[test]
+    fn compile_returns_none_for_non_regex_predicate() {
+        let matcher = matcher_response_contains("anything");
+        assert!(matches!(
+            CompiledMatcherRegex::compile(&matcher).unwrap(),
+            CompiledMatcherRegex::None
+        ));
+    }
+
+    #[test]
+    fn compile_dispatches_http_body_vs_socket_bytes() {
+        let http = QualifiedMatch {
+            field: QualifiedField {
+                target: "h".into(),
+                kind: FieldKind::Body,
+            },
+            predicate: MatchPredicate::Regex("ok".into()),
+        };
+        assert!(matches!(
+            CompiledMatcherRegex::compile(&http).unwrap(),
+            CompiledMatcherRegex::HttpBody(_)
+        ));
+
+        let sock = QualifiedMatch {
+            field: QualifiedField {
+                target: "h".into(),
+                kind: FieldKind::Banner,
+            },
+            predicate: MatchPredicate::Regex("ok".into()),
+        };
+        assert!(matches!(
+            CompiledMatcherRegex::compile(&sock).unwrap(),
+            CompiledMatcherRegex::SocketBytes(_)
+        ));
+    }
+
+    #[test]
+    fn compile_surfaces_invalid_regex_at_compile_time() {
+        let matcher = QualifiedMatch {
+            field: QualifiedField {
+                target: "h".into(),
+                kind: FieldKind::Body,
+            },
+            // Unbalanced bracket — invalid regex.
+            predicate: MatchPredicate::Regex("[invalid".into()),
+        };
+        assert!(CompiledMatcherRegex::compile(&matcher).is_err());
     }
 }

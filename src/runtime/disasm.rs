@@ -121,10 +121,14 @@ fn format_socket_probe(label: &str, spec: &crate::runtime::spec::SocketProbeSpec
         line.push_str(&format!(" port={port}"));
     }
     if let Some(payload) = &spec.payload {
-        let shown = if payload.iter().all(|b| {
+        let is_text = payload.iter().all(|b| {
             b.is_ascii_graphic() || *b == b' ' || *b == b'\r' || *b == b'\n' || *b == b'\t'
-        }) {
-            format!("{payload:?}")
+        });
+        let shown = if is_text {
+            // Decode lossy as text — `format!("{:?}", Vec<u8>)` would
+            // print "[80, 73, 78, 71]" instead of "\"PING\"".
+            let text = String::from_utf8_lossy(payload);
+            format!("{text:?}")
         } else {
             format!("0x{}", crate::runtime::binary::bytes_to_hex(payload))
         };
@@ -144,6 +148,8 @@ fn format_http_method(method: &crate::contract::HttpMethod) -> &'static str {
         HttpMethod::Put => "PUT",
         HttpMethod::Patch => "PATCH",
         HttpMethod::Delete => "DELETE",
+        HttpMethod::Head => "HEAD",
+        HttpMethod::Options => "OPTIONS",
     }
 }
 
@@ -224,12 +230,21 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
             .map(|s| format!("{s:?}"))
             .unwrap_or_else(|| format!("#{idx}?"))
     };
+    // Use `.get()` rather than direct slicing so corrupt-but-decodable
+    // bytecode (start/len pointing past the string pool) cannot panic the
+    // disassembler — important because `ruso disasm` is reachable from
+    // untrusted `.bc` files.
     let string_span = |start: u32, len: u16| -> String {
-        bytecode.strings[start as usize..start as usize + len as usize]
-            .iter()
-            .map(|value| format!("{value:?}"))
-            .collect::<Vec<_>>()
-            .join(", ")
+        let start = start as usize;
+        let end = start.saturating_add(len as usize);
+        match bytecode.strings.get(start..end) {
+            Some(slice) => slice
+                .iter()
+                .map(|value| format!("{value:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            None => format!("<oob {start}..{end}>"),
+        }
     };
 
     match instr {
@@ -301,5 +316,45 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
         Instr::Fail => "Fail".into(),
         Instr::Continue => "Continue".into(),
         Instr::Exit => "Exit".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::bytecode::Instr;
+    use crate::runtime::spec::{CheckMetadata, ProgramSpec};
+
+    fn empty_bytecode() -> BytecodeProgram {
+        BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            code: vec![],
+            strings: vec![],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        }
+    }
+
+    #[test]
+    fn out_of_bounds_string_span_does_not_panic() {
+        // Crafted (corrupt) bytecode where ForList claims a string span
+        // beyond the actual pool. Pre-fix this would panic in the
+        // disassembler — now it should render a sentinel.
+        let bytecode = BytecodeProgram {
+            code: vec![Instr::ForList {
+                item: 99,
+                start: 99,
+                len: 5,
+                end_pc: 0,
+            }],
+            ..empty_bytecode()
+        };
+        let out = format_human(&bytecode);
+        assert!(out.contains("<oob"), "expected oob sentinel, got:\n{out}");
     }
 }

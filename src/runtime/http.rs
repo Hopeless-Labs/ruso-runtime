@@ -22,8 +22,9 @@ pub async fn execute_http(
     variables: &HashMap<String, VariableValue>,
     max_response_bytes: usize,
 ) -> Result<HttpResponse, RuntimeError> {
-    let path = interpolate(&spec.path, variables)?;
-    let url = join_url(base_url, &path);
+    let raw_path = spec.path.as_str();
+    let path = interpolate(raw_path, variables)?;
+    let url = join_url(base_url, raw_path, &path)?;
     let method = to_reqwest_method(&spec.method);
     let timeout = spec.timeout.as_deref().map(parse_duration).transpose()?;
 
@@ -45,15 +46,18 @@ pub async fn execute_http(
         );
     }
 
-    for (name, value) in &spec.cookies {
-        builder = builder.header(
-            "cookie",
-            format!(
-                "{}={}",
-                interpolate(name, variables)?,
-                interpolate(value, variables)?
-            ),
-        );
+    // RFC 6265 §5.4 requires all cookies to ride in a single `Cookie:` header
+    // joined by `"; "`. reqwest's `.header()` appends, so emitting one call
+    // per cookie produced multiple `Cookie:` headers — accepted leniently by
+    // some servers, rejected outright by others. Build one joined string.
+    if !spec.cookies.is_empty() {
+        let mut parts = Vec::with_capacity(spec.cookies.len());
+        for (name, value) in &spec.cookies {
+            let name = interpolate(name, variables)?;
+            let value = interpolate(value, variables)?;
+            parts.push(format!("{name}={value}"));
+        }
+        builder = builder.header("cookie", parts.join("; "));
     }
 
     if !spec.queries.is_empty() {
@@ -185,28 +189,151 @@ fn to_reqwest_method(method: &HttpMethod) -> Method {
         HttpMethod::Put => Method::PUT,
         HttpMethod::Patch => Method::PATCH,
         HttpMethod::Delete => Method::DELETE,
+        HttpMethod::Head => Method::HEAD,
+        HttpMethod::Options => Method::OPTIONS,
     }
 }
 
-fn join_url(base: &str, path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return path.to_string();
+/// Resolve the request URL relative to the scan target (`base`).
+///
+/// `raw_path` is the path written in the script (pre-interpolation);
+/// `resolved_path` is the same string after `{{ var }}` substitution.
+/// We allow absolute URLs *if and only if* the script itself wrote one —
+/// allowing interpolation to switch the scheme/host opens an SSRF where a
+/// previously-extracted variable can redirect later probes to internal
+/// services (`http://169.254.169.254/...`, `http://localhost:6379/...`).
+fn join_url(base: &str, raw_path: &str, resolved_path: &str) -> Result<String, RuntimeError> {
+    let raw_is_absolute = is_absolute_http_url(raw_path);
+    let resolved_is_absolute = is_absolute_http_url(resolved_path);
+    if raw_is_absolute {
+        return Ok(resolved_path.to_string());
+    }
+    if resolved_is_absolute {
+        // Interpolation produced an absolute URL from a relative template —
+        // a hostname swap by variable. Reject.
+        return Err(RuntimeError::Other(format!(
+            "interpolated path switched to absolute URL; refusing as SSRF guard: {resolved_path}"
+        )));
     }
     let base = base.trim_end_matches('/');
-    let path = if path.starts_with('/') {
-        path.to_string()
+    let path = if resolved_path.starts_with('/') {
+        resolved_path.to_string()
     } else {
-        format!("/{path}")
+        format!("/{resolved_path}")
     };
-    format!("{base}{path}")
+    Ok(format!("{base}{path}"))
 }
 
+fn is_absolute_http_url(value: &str) -> bool {
+    let lower = value.trim_start();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Convert reqwest's `HeaderMap` into a `HashMap<String, String>` for
+/// downstream matchers. HTTP allows multi-valued headers (most notably
+/// `Set-Cookie`, also `WWW-Authenticate`, `Link`, etc.); reqwest's
+/// `HeaderMap` keeps them as separate entries, but matchers expect one
+/// string per header name. We collapse duplicates by joining with `", "`,
+/// which is the RFC 7230 §3.2.2 combining rule for the headers it applies
+/// to; `Set-Cookie` is the documented exception, but matchers operate by
+/// substring search ("`HttpOnly`", "`Secure`", domain names) which still
+/// works correctly against a joined string.
 fn flatten_headers(headers: &HeaderMap) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+    let mut map: HashMap<String, String> = HashMap::new();
     for (name, value) in headers.iter() {
-        if let Ok(text) = value.to_str() {
-            map.insert(name.as_str().to_string(), text.to_string());
+        let Ok(text) = value.to_str() else { continue };
+        match map.entry(name.as_str().to_string()) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                let combined = format!("{}, {}", e.get(), text);
+                e.insert(combined);
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(text.to_string());
+            }
         }
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn join_url_appends_relative_path() {
+        let url = join_url("http://t.example", "/api", "/api").unwrap();
+        assert_eq!(url, "http://t.example/api");
+    }
+
+    #[test]
+    fn join_url_handles_path_without_leading_slash() {
+        let url = join_url("http://t.example", "api", "api").unwrap();
+        assert_eq!(url, "http://t.example/api");
+    }
+
+    #[test]
+    fn join_url_strips_trailing_base_slash() {
+        let url = join_url("http://t.example/", "/api", "/api").unwrap();
+        assert_eq!(url, "http://t.example/api");
+    }
+
+    #[test]
+    fn join_url_allows_explicitly_absolute_path() {
+        // Script writer wrote a full URL into the path — that's an explicit
+        // opt-in, so we honor it (e.g. probing a different origin during a
+        // multi-host check).
+        let url = join_url(
+            "http://t.example",
+            "https://other.example/x",
+            "https://other.example/x",
+        )
+        .unwrap();
+        assert_eq!(url, "https://other.example/x");
+    }
+
+    #[test]
+    fn join_url_rejects_interpolated_scheme_switch() {
+        // The template is a relative path, but a variable expanded into a
+        // full URL. That's an SSRF vector — refuse.
+        let err = join_url(
+            "http://t.example",
+            "/api/{{ next }}",
+            "http://169.254.169.254/latest/meta-data",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("SSRF"), "expected SSRF guard, got: {msg}");
+    }
+
+    #[test]
+    fn join_url_rejects_interpolated_localhost_redirect() {
+        let err = join_url(
+            "http://t.example",
+            "{{ extracted }}",
+            "http://localhost:6379/info",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("SSRF"));
+    }
+
+    #[test]
+    fn flatten_headers_combines_duplicates() {
+        let mut headers = HeaderMap::new();
+        headers.append("set-cookie", HeaderValue::from_static("a=1"));
+        headers.append("set-cookie", HeaderValue::from_static("b=2"));
+        let flat = flatten_headers(&headers);
+        let cookie = flat.get("set-cookie").expect("set-cookie");
+        // Joined form so substring matchers on cookie attributes still work.
+        assert!(cookie.contains("a=1"));
+        assert!(cookie.contains("b=2"));
+    }
+
+    #[test]
+    fn flatten_headers_keeps_single_value_intact() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-foo", HeaderValue::from_static("bar"));
+        let flat = flatten_headers(&headers);
+        assert_eq!(flat.get("x-foo").map(String::as_str), Some("bar"));
+    }
 }

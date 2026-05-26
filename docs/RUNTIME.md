@@ -10,7 +10,7 @@ use ruso_runtime::{Executor, ExecutorConfig, BytecodeProgram};
 // From compiler
 let executor = Executor::from_bytecode(config, program)?;
 
-// From bytes (RUSO v1)
+// From bytes (RUSO v2)
 let executor = Executor::from_bytes(config, &bytes)?;
 
 let result = executor.run().await?;
@@ -56,11 +56,37 @@ Other scripts in the same `ruso scan` continue. Scripts that share the same clos
 |-------|---------|------|
 | `base_url` | `""` | HTTP probe base (from CLI `--target`) |
 | `default_timeout` | 30s | Connect/read fallback |
+| `read_timeout` | 10s | Per-read I/O timeout for socket probes |
+| `max_response_bytes` | 10 MiB | HTTP body cap |
 | `follow_redirect` | true | HTTP client |
-| `verify_ssl` | false | HTTP **and** TCP TLS (`tls true`); scanner default skips cert verify |
+| `verify_ssl` | **true** | HTTP **and** TCP TLS (`tls true`) |
 | `proxy` | none | HTTP proxy URL |
+| `max_script_duration` | 5 minutes | Wall-clock budget per script (`None` disables) |
 
-CLI `--verify-tls` sets `verify_ssl = true` for the whole run. Per HTTP probe, `verify_ssl true|false` in the script overrides the global default for that request only.
+`verify_ssl` defaults to **true**. Earlier revisions defaulted to `false`
+("scanner mode"), which made a freshly-constructed runtime open to MITM —
+an on-path attacker could plant findings on the scanner or read in-flight
+request data. Disable per-call by setting `verify_ssl = false`; the CLI
+exposes this as `--insecure` and emits a runtime warning when used. Per
+HTTP probe, `verify_ssl true|false` in the script overrides the global
+setting for that request only.
+
+`max_script_duration` puts a wall-clock cap on a single script run, so
+pathological bytecode (`repeat u32::MAX { sleep 10ms }`, runaway loops)
+cannot pin a tokio worker. The executor checks the budget at the top of
+every VM instruction; on exceedance `run()` returns `RuntimeError::Other`
+with a message containing `"budget"`.
+
+## SSRF guard on interpolated paths
+
+`HttpRequestSpec.path` is templated and may contain `{{ var }}`
+placeholders. When the *literal* `path` is relative, the resolved value is
+also required to be relative — an interpolation that expands into a full
+URL (`http://169.254.169.254/latest/meta-data`, `http://localhost:6379/…`)
+is rejected with `RuntimeError::Other("interpolated path switched to
+absolute URL; refusing as SSRF guard: …")`. Scripts that intentionally
+probe a separate origin should write the absolute URL into the script
+itself; that path is honoured verbatim.
 
 ## send_probe flow
 
@@ -102,7 +128,9 @@ Requires `port`. `tls` is rejected. Session reuse mirrors TCP with `ProbeSession
 
 **TCP TLS**
 
-`tokio-rustls` with WebPKI roots when `verify_ssl` is true; custom `NoVerifier` when false (default).
+`tokio-rustls` with WebPKI roots when `verify_ssl` is true (the default).
+A custom `NoVerifier` is installed only when explicitly requested via
+`verify_ssl = false`.
 
 **Multi-read (`read_idle_ms > 0`)**
 
@@ -170,4 +198,38 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 2. Compile a `.ruso` script and `Executor::from_bytecode` + manual run.  
 3. `format_human` / round-trip `encode` → `decode` for bytecode changes.
 
-Recompile stored `.bc` files when metadata wire layout changes. Bump `VERSION` when probe or instruction encoding changes.
+Recompile stored `.bc` files when metadata wire layout changes. Bump `VERSION` when probe or instruction encoding changes — the v1 → v2 widening of `CmpValue::Number` to `u64` is the most recent example.
+
+## IPv6 sockets
+
+Direct socket connect addresses are formatted via
+`port_cache::format_socket_addr`, which brackets literal IPv6 addresses so
+`::1` becomes `[::1]:443` (the form `TcpStream::connect` requires).
+`port_cache` also normalises IPv6 hosts before keying the reachability
+cache, so `::1` and `0:0:0:0:0:0:0:1` share one entry. The UDP bind
+address tracks the remote family (`[::]:0` for IPv6 targets).
+
+## Header-duplicate handling
+
+reqwest exposes multi-valued response headers (most notably `Set-Cookie`)
+as separate entries. The runtime flattens them into one string per header
+by joining with `", "` so substring matchers (`header "set-cookie"
+contains "HttpOnly"`, etc.) see all values. RFC 7230 §3.2.2 documents this
+combining rule; `Set-Cookie` is the standard exception, but substring
+matching against the joined string still works for the cookie attributes
+scanners typically check.
+
+## Cookie request header
+
+Outbound `cookie name "value"` directives in a single HTTP block are now
+emitted as one `Cookie:` request header joined by `"; "` per RFC 6265 §5.4.
+The earlier per-call `header("cookie", …)` pattern produced multiple
+`Cookie:` headers, which several servers reject outright.
+
+## JSON body encoding
+
+`object_to_json` builds JSON via `serde_json`, so every interpolated value
+is escaped as a string literal rather than concatenated. The previous
+hand-rolled `escape_json` only handled `\` `"` `\n` `\r` `\t` and left a
+JSON-injection vector open against control characters and any value
+containing literal `","key":"`. The serde-based path closes that hole.

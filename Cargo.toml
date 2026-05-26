@@ -17,6 +17,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "0.26"
 regex = "1.11"
+serde_json = "1"
 tracing = "0.1"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 

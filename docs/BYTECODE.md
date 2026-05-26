@@ -1,4 +1,4 @@
-# Bytecode and opcodes (v1)
+# Bytecode and opcodes (v2)
 
 Compiled output is a `BytecodeProgram` defined in `ruso-runtime/src/runtime/bytecode.rs`. The on-disk / on-wire format is implemented in `runtime/binary.rs`.
 
@@ -6,8 +6,15 @@ Constants:
 
 ```rust
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 ```
+
+## Version history
+
+| Version | Changes |
+|---------|---------|
+| **v1** | Initial format. `CmpValue::Number` was written as `u32` and silently truncated values above `u32::MAX`. Discontinued. |
+| **v2** | `CmpValue::Number` is `u64`. HTTP method tag space extended with `Head` (5) and `Options` (6). Every length-prefixed list is bounded against the remaining buffer in the decoder, so a malicious `.bc` file can no longer trigger multi-GB allocations from a `u32::MAX` count. |
 
 ## File layout
 
@@ -25,7 +32,42 @@ Sections are written in order:
 | 8 | Evidence pool | `EvidenceKind` entries |
 | 9 | Code | instruction stream |
 
-CLI `compile` emits hex; `exec` accepts hex or `@file.bc`.
+CLI `compile` emits hex; `exec` accepts hex files. The runtime
+`load_bytecode_input` helper used to accept an `@path` prefix to read a file
+directly; that overload was removed in v2 to keep file IO inside the CLI and
+prevent any caller from passing less-trusted hex text through a path-traversal
+sink.
+
+## Bounded counts (decoder hardening)
+
+Every `u32` count field that drives a `Vec::with_capacity(count)` is now
+validated against the remaining buffer in the same step:
+
+```rust
+let raw = r.u32()?;
+let count = r.bounded_count(raw)?; // errors if count > remaining bytes
+let mut out = Vec::with_capacity(count);
+```
+
+Without this guard a corrupt or hostile bytecode could set
+`count = u32::MAX`, triggering a multi-GB allocation and killing the
+scanner before the rest of the buffer was inspected.
+
+The bound also applies to the length-prefixed `str` and `opt_bytes` readers,
+so an inner `len` field that overruns the buffer is rejected before the
+allocation, not after.
+
+## HTTP methods (wire tag)
+
+| Tag | Method |
+|-----|--------|
+| 0 | `GET` |
+| 1 | `POST` |
+| 2 | `PUT` |
+| 3 | `PATCH` |
+| 4 | `DELETE` |
+| 5 | `HEAD`    *(v2)* |
+| 6 | `OPTIONS` *(v2)* |
 
 ## Probe kinds (wire tag)
 
@@ -40,13 +82,13 @@ CLI `compile` emits hex; `exec` accepts hex or `@file.bc`.
 
 Binary order:
 
-1. `host` — length-prefixed UTF-8 string  
-2. `port` — optional `u16` (`u8` flag + value)  
-3. `payload` — optional byte blob (`u8` flag + `u32` len + bytes)  
-4. `tls` — `u8` (0/1)  
-5. `session` — `u8` (0/1)  
-6. `read_max` — `u32`  
-7. `read_idle_ms` — `u32`  
+1. `host` — length-prefixed UTF-8 string
+2. `port` — optional `u16` (`u8` flag + value)
+3. `payload` — optional byte blob (`u8` flag + `u32` len + bytes)
+4. `tls` — `u8` (0/1)
+5. `session` — `u8` (0/1)
+6. `read_max` — `u32`
+7. `read_idle_ms` — `u32`
 
 ## Instruction set
 
@@ -74,21 +116,41 @@ Wire opcode byte → `Instr` variant:
 | 18 | `Repeat` | `count: u32`, `end_pc: u32` |
 | 19 | `LoopBack` | — |
 | 20 | `Break` | — |
+| 21 | `SetList` | `name_id: u32`, `start: u32`, `len: u16` |
+| 22 | `ForList` | `item_id: u32`, `start: u32`, `len: u16`, `end_pc: u32` |
+| 23 | `ForVar` | `item_id: u32`, `list_id: u32`, `end_pc: u32` |
 
 Public constants: `ruso_runtime::opcode::{OP_*}`.
+
+## CmpValue encoding (v2)
+
+| Tag | Variant | Wire |
+|-----|---------|------|
+| 0 | `Number(u64)` | `u64` little-endian |
+| 1 | `String(String)` | length-prefixed UTF-8 |
+| 2 | `Duration(String)` | length-prefixed UTF-8 |
+
+The `Number` payload widened from `u32` to `u64` in v2. Scripts that compare
+against values above ~4.3 billion (e.g. `response_size > 5_000_000_000`)
+now round-trip without silent truncation.
 
 ## Control-flow patching
 
 The compiler emits placeholders and patches PCs:
 
-- **`IfMatch`** — `else_pc` set after body is emitted.  
+- **`IfMatch`** — `else_pc` set after body is emitted.
 - **`Repeat`** — `end_pc` set after `LoopBack` is emitted.
 
 Executor semantics:
 
-- **`Repeat`** — pushes `LoopFrame { remaining: count, head_pc: pc+1, end_pc }`, enters body.  
-- **`LoopBack`** — decrements `remaining`; if `> 0`, jump to `head_pc`, else pop frame and continue after loop.  
+- **`Repeat`** — pushes `LoopFrame { remaining: count, head_pc: pc+1, end_pc }`, enters body.
+- **`LoopBack`** — decrements `remaining`; if `> 0`, jump to `head_pc`, else pop frame and continue after loop.
 - **`Break`** — pop innermost frame, jump to `end_pc`.
+
+The executor also enforces a **wall-clock budget**
+(`ExecutorConfig::max_script_duration`, default 5 minutes). Pathological
+bytecode such as `Repeat { count: u32::MAX } Sleep "10ms" LoopBack` cannot
+keep a tokio worker busy beyond that budget.
 
 ## Metadata section
 
@@ -115,10 +177,10 @@ Each string list uses the same `write_strings` / `read_strings` helper as the st
 
 All `u32` IDs index into compile-time pools in `BytecodeProgram`:
 
-- Strings — probe names, variable names, duration text for sleep/retry  
-- Payloads — binary overrides for `Send`  
-- Matchers — full `QualifiedMatch` structs  
-- Extracts / Evidence — parallel structures  
+- Strings — probe names, variable names, duration text for sleep/retry
+- Payloads — binary overrides for `Send`
+- Matchers — full `QualifiedMatch` structs
+- Extracts / Evidence — parallel structures
 
 Evidence pool entries (`EvidenceKind`):
 
@@ -138,7 +200,7 @@ use ruso_runtime::format_human;
 let text = format_human(&bytecode);
 ```
 
-Human listing is in `runtime/disasm.rs` (metadata, probes, pools, annotated instructions).
+Human listing is in `runtime/disasm.rs` (metadata, probes, pools, annotated instructions). String spans referenced by `ForList`/`SetList` are looked up via `.get()` rather than indexed, so corrupt-but-decodable bytecode that points past the string pool no longer panics the disassembler.
 
 ## Embedding bytecode
 
@@ -150,13 +212,14 @@ let executor = Executor::from_bytecode(config, program)?;
 let result = executor.run().await?;
 ```
 
-Compilers **must** target `VERSION` 1. Recompile stored `.bc` files after metadata layout changes. Bump `VERSION` when changing probe or `Send` encoding.
+Compilers **must** target `VERSION` 2. Recompile stored `.bc` files when the
+runtime is upgraded across a version bump.
 
 ## Design note: why not more opcodes?
 
 Protocol-specific opcodes (`OP_SMTP`, `OP_REDIS`, …) would couple the VM to services. Ruso keeps:
 
-- **Data** in the probe table (payload bytes, ports, TLS flag).  
+- **Data** in the probe table (payload bytes, ports, TLS flag).
 - **Control** in a small ISA (`Send`, `Match`, `Repeat`, …).
 
 New network behavior should prefer new **socket options** or **send overrides** before new opcodes.

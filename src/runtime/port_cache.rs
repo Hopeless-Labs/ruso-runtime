@@ -1,6 +1,7 @@
 //! TCP port reachability cache (30s TTL), shared across executor runs in one process.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,9 @@ use crate::runtime::spec::{ProbeKind, ProgramSpec};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Cap cache size to bound memory growth during long-running bulk scans.
+/// At ~50 bytes per entry plus map overhead this is well under 1 MB.
+const MAX_CACHE_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reachability {
@@ -60,7 +64,7 @@ impl PortCache {
             match kind {
                 ProbeKind::Tcp(socket) | ProbeKind::Udp(socket) => {
                     if let Some(port) = socket.port {
-                        out.push((socket.host.clone(), port));
+                        out.push((normalize_host(&socket.host), port));
                     }
                 }
                 ProbeKind::Dns(socket) => {
@@ -68,7 +72,7 @@ impl PortCache {
                         continue;
                     }
                     let port = socket.port.unwrap_or(53);
-                    out.push((socket.host.clone(), port));
+                    out.push((normalize_host(&socket.host), port));
                 }
                 ProbeKind::Http(_) => {}
             }
@@ -115,7 +119,8 @@ impl PortCache {
     }
 
     async fn get_state(&self, host: &str, port: u16) -> Reachability {
-        let key = (host.to_string(), port);
+        let normalized = normalize_host(host);
+        let key = (normalized, port);
         {
             let guard = self.entries.lock().await;
             if let Some(entry) = guard.get(&key)
@@ -125,8 +130,19 @@ impl PortCache {
             }
         }
 
-        let state = probe_tcp(host, port).await;
+        let state = probe_tcp(&key.0, port).await;
         let mut guard = self.entries.lock().await;
+        // Evict the oldest entry if we'd otherwise exceed the cap. Linear
+        // scan is fine at the 4K-entry scale — bulk scans grow this slowly.
+        if guard.len() >= MAX_CACHE_ENTRIES
+            && !guard.contains_key(&key)
+            && let Some(oldest_key) = guard
+                .iter()
+                .min_by_key(|(_, e)| e.checked_at)
+                .map(|(k, _)| k.clone())
+        {
+            guard.remove(&oldest_key);
+        }
         guard.insert(
             key,
             Entry {
@@ -141,11 +157,23 @@ impl PortCache {
 /// Host and port from CLI `--target` / executor `base_url` (for `{{scan_host}}` / `{{scan_port}}`).
 pub fn scan_target_host_port(base_url: &str) -> Option<(String, u16)> {
     let url = Url::parse(base_url).ok()?;
-    let host = url.host_str()?.to_string();
+    let host = url.host_str()?;
     let port = url
         .port()
         .unwrap_or_else(|| if url.scheme() == "https" { 443 } else { 80 });
-    Some((host, port))
+    Some((normalize_host(host), port))
+}
+
+/// Canonicalize a host string so equivalent IPv6 representations
+/// (`::1`, `0:0:0:0:0:0:0:1`) and arbitrary case in hostnames share one
+/// cache entry. Falls back to the original string on unknown formats.
+fn normalize_host(host: &str) -> String {
+    // Strip any surrounding brackets so `[::1]` and `::1` normalize the same.
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        return ip.to_string();
+    }
+    host.to_ascii_lowercase()
 }
 
 fn dedupe_endpoints(mut endpoints: Vec<(String, u16)>) -> Vec<(String, u16)> {
@@ -154,10 +182,59 @@ fn dedupe_endpoints(mut endpoints: Vec<(String, u16)>) -> Vec<(String, u16)> {
     endpoints
 }
 
+/// Format a `host:port` socket address, bracketing literal IPv6 addresses
+/// so they parse correctly via `tokio::net::TcpStream::connect`.
+pub fn format_socket_addr(host: &str, port: u16) -> String {
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    if trimmed.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{trimmed}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 async fn probe_tcp(host: &str, port: u16) -> Reachability {
-    let address = format!("{host}:{port}");
+    let address = format_socket_addr(host, port);
     match timeout(CONNECT_TIMEOUT, TcpStream::connect(address.as_str())).await {
         Ok(Ok(_)) => Reachability::Open,
         _ => Reachability::Closed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_ipv6_collapses_long_form() {
+        assert_eq!(normalize_host("::1"), normalize_host("0:0:0:0:0:0:0:1"));
+        assert_eq!(normalize_host("[::1]"), normalize_host("::1"));
+    }
+
+    #[test]
+    fn normalize_hostname_lowercases() {
+        assert_eq!(normalize_host("Example.COM"), "example.com");
+    }
+
+    #[test]
+    fn format_socket_addr_brackets_ipv6() {
+        assert_eq!(format_socket_addr("::1", 443), "[::1]:443");
+    }
+
+    #[test]
+    fn format_socket_addr_passes_through_ipv4() {
+        assert_eq!(format_socket_addr("127.0.0.1", 80), "127.0.0.1:80");
+    }
+
+    #[test]
+    fn format_socket_addr_passes_through_hostname() {
+        assert_eq!(format_socket_addr("example.com", 80), "example.com:80");
+    }
+
+    #[test]
+    fn scan_target_handles_ipv6_url() {
+        let (host, port) = scan_target_host_port("http://[::1]:8080/api").unwrap();
+        assert_eq!(host, "::1");
+        assert_eq!(port, 8080);
     }
 }

@@ -1,4 +1,14 @@
-//! Binary serialization of `BytecodeProgram` (magic `RUSO`, version 1).
+//! Binary serialization of `BytecodeProgram` (magic `RUSO`, version 2).
+//!
+//! # Version history
+//!
+//! - **v1** — initial format. `CmpValue::Number` was serialized as `u32`, so
+//!   values above `u32::MAX` were silently truncated. v1 readers no longer
+//!   exist in this codebase; the decoder rejects the version byte.
+//! - **v2** — `CmpValue::Number` is `u64`; HTTP method tag space expanded to
+//!   include `Head` (5) and `Options` (6). All untrusted list/count fields
+//!   are bounded against the remaining buffer to prevent OOM allocations from
+//!   a malicious or corrupt `.bc` file.
 
 use std::collections::HashMap;
 
@@ -12,7 +22,7 @@ use crate::runtime::bytecode::{BytecodeProgram, Instr};
 use crate::runtime::spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec};
 
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 #[derive(Debug, Error)]
 pub enum BytecodeError {
@@ -73,64 +83,75 @@ pub fn decode(bytes: &[u8]) -> Result<BytecodeProgram, BytecodeError> {
 }
 
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 pub fn bytes_to_hex_dump(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     for (offset, chunk) in bytes.chunks(16).enumerate() {
         let off = offset * 16;
-        let hex: String = chunk
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let pad = if chunk.len() < 16 {
-            "   ".repeat(16 - chunk.len())
-        } else {
-            String::new()
-        };
-        let ascii: String = chunk
-            .iter()
-            .map(|&b| {
-                if b.is_ascii_graphic() || b == b' ' {
-                    b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-        out.push_str(&format!("{off:08x}: {hex}{pad}  |{ascii}|\n"));
+        let _ = write!(out, "{off:08x}: ");
+        for b in chunk {
+            let _ = write!(out, "{b:02x} ");
+        }
+        for _ in chunk.len()..16 {
+            out.push_str("   ");
+        }
+        out.push_str(" |");
+        for &b in chunk {
+            if b.is_ascii_graphic() || b == b' ' {
+                out.push(b as char);
+            } else {
+                out.push('.');
+            }
+        }
+        out.push_str("|\n");
     }
     out
 }
 
 pub fn hex_to_bytes(input: &str) -> Result<Vec<u8>, BytecodeError> {
-    let hex: String = input.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    if !hex.len().is_multiple_of(2) {
+    let mut compact = String::with_capacity(input.len());
+    for c in input.chars() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if !c.is_ascii_hexdigit() {
+            return Err(BytecodeError::InvalidHex(format!("non-hex char: {c:?}")));
+        }
+        compact.push(c);
+    }
+    if !compact.len().is_multiple_of(2) {
         return Err(BytecodeError::InvalidHex("odd length".into()));
     }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let chars: Vec<char> = hex.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let pair: String = chars[i..i + 2].iter().collect();
-        let byte = u8::from_str_radix(&pair, 16)
+    let bytes = compact.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks_exact(2) {
+        // SAFETY: validated above as ascii hex.
+        let pair = std::str::from_utf8(chunk).expect("ascii hex");
+        let byte = u8::from_str_radix(pair, 16)
             .map_err(|err| BytecodeError::InvalidHex(err.to_string()))?;
         out.push(byte);
-        i += 2;
     }
     Ok(out)
 }
 
-/// Hex string or `@path` to raw bytecode file.
+/// Decode a hex string into raw bytecode bytes.
+///
+/// Earlier revisions accepted an `@path` prefix that would read the file as
+/// raw bytecode. That alternate entry point conflated "hex-decoded input"
+/// with "file IO" and provided a path-traversal sink for any caller passing
+/// less-trusted input (env vars, CI parameters, scripted wrappers). File IO
+/// is now the CLI's responsibility — runtime callers pass bytes directly via
+/// [`decode`] or hex via this function.
 pub fn load_bytecode_input(input: &str) -> Result<Vec<u8>, BytecodeError> {
-    let trimmed = input.trim();
-    if let Some(path) = trimmed.strip_prefix('@') {
-        std::fs::read(path).map_err(|err| BytecodeError::InvalidHex(err.to_string()))
-    } else {
-        hex_to_bytes(trimmed)
-    }
+    hex_to_bytes(input.trim())
 }
 
 #[derive(Default)]
@@ -146,6 +167,10 @@ impl Writer {
     }
 
     fn u32(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn u64(&mut self, v: u64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
 
@@ -234,8 +259,16 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.need(4)?.try_into().unwrap()))
     }
 
+    fn u64(&mut self) -> Result<u64, BytecodeError> {
+        Ok(u64::from_le_bytes(self.need(8)?.try_into().unwrap()))
+    }
+
     fn str(&mut self) -> Result<String, BytecodeError> {
         let len = self.u32()? as usize;
+        // Reject lengths that overrun the buffer before allocating.
+        if len > self.remaining() {
+            return Err(BytecodeError::Corrupt("string length exceeds buffer"));
+        }
         let bytes = self.need(len)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| BytecodeError::Corrupt("utf8"))
     }
@@ -253,6 +286,9 @@ impl<'a> Reader<'a> {
             Ok(None)
         } else {
             let len = self.u32()? as usize;
+            if len > self.remaining() {
+                return Err(BytecodeError::Corrupt("bytes length exceeds buffer"));
+            }
             Ok(Some(self.need(len)?.to_vec()))
         }
     }
@@ -263,6 +299,25 @@ impl<'a> Reader<'a> {
         } else {
             Ok(Some(self.u16()?))
         }
+    }
+
+    /// Convert an untrusted `u32` count into a `usize`, bounded against the
+    /// remaining buffer.
+    ///
+    /// Every list/pool length in the bytecode is followed by at least one
+    /// byte per element (an opcode tag, a u8 discriminant, or a 4-byte
+    /// length prefix). The strict lower bound is `1` byte per item, so any
+    /// `count > remaining()` is unambiguously corrupt — and this check runs
+    /// **before** `Vec::with_capacity(count)`, so an attacker-controlled
+    /// `count = u32::MAX` cannot trigger a multi-GB allocation.
+    fn bounded_count(&self, raw: u32) -> Result<usize, BytecodeError> {
+        let count = raw as usize;
+        if count > self.remaining() {
+            return Err(BytecodeError::Corrupt(
+                "list length exceeds remaining bytes",
+            ));
+        }
+        Ok(count)
     }
 }
 
@@ -340,7 +395,8 @@ fn write_probes(w: &mut Writer, probes: &HashMap<String, ProbeKind>) {
 }
 
 fn read_probes(r: &mut Reader<'_>) -> Result<HashMap<String, ProbeKind>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut probes = HashMap::with_capacity(count);
     for _ in 0..count {
         let name = r.str()?;
@@ -450,6 +506,8 @@ fn http_method_tag(m: &HttpMethod) -> u8 {
         HttpMethod::Put => 2,
         HttpMethod::Patch => 3,
         HttpMethod::Delete => 4,
+        HttpMethod::Head => 5,
+        HttpMethod::Options => 6,
     }
 }
 
@@ -460,6 +518,8 @@ fn read_http_method(r: &mut Reader<'_>) -> Result<HttpMethod, BytecodeError> {
         2 => HttpMethod::Put,
         3 => HttpMethod::Patch,
         4 => HttpMethod::Delete,
+        5 => HttpMethod::Head,
+        6 => HttpMethod::Options,
         _ => return Err(BytecodeError::Corrupt("http method")),
     })
 }
@@ -491,7 +551,8 @@ fn write_header_list(w: &mut Writer, pairs: &[(String, String)]) {
 }
 
 fn read_header_list(r: &mut Reader<'_>) -> Result<Vec<(String, String)>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut pairs = Vec::with_capacity(count);
     for _ in 0..count {
         pairs.push((r.str()?, r.str()?));
@@ -526,7 +587,8 @@ fn write_object(w: &mut Writer, obj: &ObjectBody) {
 }
 
 fn read_object(r: &mut Reader<'_>) -> Result<ObjectBody, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut pairs = Vec::with_capacity(count);
     for _ in 0..count {
         pairs.push((r.str()?, read_body_value(r)?));
@@ -594,7 +656,8 @@ fn write_strings(w: &mut Writer, strings: &[String]) {
 }
 
 fn read_strings(r: &mut Reader<'_>) -> Result<Vec<String>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut strings = Vec::with_capacity(count);
     for _ in 0..count {
         strings.push(r.str()?);
@@ -611,10 +674,14 @@ fn write_payloads(w: &mut Writer, payloads: &[Vec<u8>]) {
 }
 
 fn read_payloads(r: &mut Reader<'_>) -> Result<Vec<Vec<u8>>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut payloads = Vec::with_capacity(count);
     for _ in 0..count {
         let len = r.u32()? as usize;
+        if len > r.remaining() {
+            return Err(BytecodeError::Corrupt("payload length exceeds buffer"));
+        }
         payloads.push(r.need(len)?.to_vec());
     }
     Ok(payloads)
@@ -628,7 +695,8 @@ fn write_matchers(w: &mut Writer, matchers: &[QualifiedMatch]) {
 }
 
 fn read_matchers(r: &mut Reader<'_>) -> Result<Vec<QualifiedMatch>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut matchers = Vec::with_capacity(count);
     for _ in 0..count {
         matchers.push(read_matcher(r)?);
@@ -744,7 +812,10 @@ fn write_cmp_value(w: &mut Writer, value: &CmpValue) {
     match value {
         CmpValue::Number(n) => {
             w.u8(0);
-            w.u32(*n as u32);
+            // v2: full u64 — earlier revisions truncated to u32, silently
+            // mangling comparisons against values above ~4.3 billion (e.g.
+            // `response_size > 5_000_000_000`).
+            w.u64(*n);
         }
         CmpValue::String(s) => {
             w.u8(1);
@@ -759,7 +830,7 @@ fn write_cmp_value(w: &mut Writer, value: &CmpValue) {
 
 fn read_cmp_value(r: &mut Reader<'_>) -> Result<CmpValue, BytecodeError> {
     Ok(match r.u8()? {
-        0 => CmpValue::Number(r.u32()? as u64),
+        0 => CmpValue::Number(r.u64()?),
         1 => CmpValue::String(r.str()?),
         2 => CmpValue::Duration(r.str()?),
         _ => return Err(BytecodeError::Corrupt("cmp value")),
@@ -774,7 +845,8 @@ fn write_extracts(w: &mut Writer, extracts: &[ExtractSource]) {
 }
 
 fn read_extracts(r: &mut Reader<'_>) -> Result<Vec<ExtractSource>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut extracts = Vec::with_capacity(count);
     for _ in 0..count {
         extracts.push(read_extract(r)?);
@@ -819,7 +891,8 @@ fn write_evidence(w: &mut Writer, kinds: &[EvidenceKind]) {
 }
 
 fn read_evidence(r: &mut Reader<'_>) -> Result<Vec<EvidenceKind>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut kinds = Vec::with_capacity(count);
     for _ in 0..count {
         kinds.push(read_evidence_kind(r)?);
@@ -889,7 +962,8 @@ fn write_code(w: &mut Writer, code: &[Instr]) {
 }
 
 fn read_code(r: &mut Reader<'_>) -> Result<Vec<Instr>, BytecodeError> {
-    let count = r.u32()? as usize;
+    let raw = r.u32()?;
+    let count = r.bounded_count(raw)?;
     let mut code = Vec::with_capacity(count);
     for _ in 0..count {
         code.push(read_instr(r)?);
@@ -1085,6 +1159,14 @@ mod tests {
     }
 
     #[test]
+    fn hex_rejects_non_hex_chars() {
+        match hex_to_bytes("zz") {
+            Err(BytecodeError::InvalidHex(_)) => {}
+            other => panic!("expected InvalidHex, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn read_severity_rejects_unknown_byte() {
         let mut r = Reader::new(&[0x99]);
         match read_severity(&mut r) {
@@ -1110,11 +1192,20 @@ mod tests {
 
     #[test]
     fn read_http_method_rejects_unknown_byte() {
-        let mut r = Reader::new(&[0x42]);
+        let mut r = Reader::new(&[0xff]);
         assert!(matches!(
             read_http_method(&mut r),
             Err(BytecodeError::Corrupt("http method"))
         ));
+    }
+
+    #[test]
+    fn read_http_method_accepts_head_and_options() {
+        for (byte, expected) in [(5u8, HttpMethod::Head), (6, HttpMethod::Options)] {
+            let data = [byte];
+            let mut r = Reader::new(&data);
+            assert_eq!(read_http_method(&mut r).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -1133,5 +1224,106 @@ mod tests {
             read_cmp_value(&mut r),
             Err(BytecodeError::Corrupt("cmp value"))
         ));
+    }
+
+    #[test]
+    fn cmp_number_roundtrips_full_u64() {
+        // Regression for the v1 → v2 fix: writing wrapped to u32 and silently
+        // truncated large numbers. The v2 wire format preserves the full u64.
+        let mut w = Writer::default();
+        let value = CmpValue::Number(u64::MAX - 5);
+        write_cmp_value(&mut w, &value);
+        let mut r = Reader::new(&w.0);
+        assert_eq!(read_cmp_value(&mut r).unwrap(), value);
+    }
+
+    #[test]
+    fn bounded_count_rejects_oversized_count() {
+        // Attacker writes count = u32::MAX with only a few bytes following.
+        // Without bounding this triggers a multi-GB `Vec::with_capacity`.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = Reader::new(&payload);
+        let raw = r.u32().unwrap();
+        assert!(matches!(
+            r.bounded_count(raw),
+            Err(BytecodeError::Corrupt(
+                "list length exceeds remaining bytes"
+            ))
+        ));
+    }
+
+    #[test]
+    fn read_strings_rejects_oversized_count() {
+        // Bytecode: "RUSO" + version + huge string count + nothing else.
+        let mut bad = Vec::new();
+        bad.extend_from_slice(MAGIC);
+        bad.push(VERSION);
+        // skip past metadata/probes by hand-crafting minimal valid prefix
+        // — instead exercise read_strings directly.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = Reader::new(&buf);
+        assert!(matches!(
+            read_strings(&mut r),
+            Err(BytecodeError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn read_payloads_rejects_oversized_count() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = Reader::new(&buf);
+        assert!(matches!(
+            read_payloads(&mut r),
+            Err(BytecodeError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn read_payloads_rejects_oversized_payload_length() {
+        // count = 1 (valid), but the single payload claims a huge length.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u32.to_le_bytes()); // count
+        buf.extend_from_slice(&u32::MAX.to_le_bytes()); // payload length
+        let mut r = Reader::new(&buf);
+        assert!(matches!(
+            read_payloads(&mut r),
+            Err(BytecodeError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn read_str_rejects_oversized_length() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = Reader::new(&buf);
+        assert!(matches!(r.str(), Err(BytecodeError::Corrupt(_))));
+    }
+
+    #[test]
+    fn decode_rejects_bad_version() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(MAGIC);
+        buf.push(99); // unsupported version
+        assert!(matches!(decode(&buf), Err(BytecodeError::BadVersion(99))));
+    }
+
+    #[test]
+    fn decode_rejects_bad_magic() {
+        let buf = [0u8, 0u8, 0u8, 0u8, VERSION];
+        assert!(matches!(decode(&buf), Err(BytecodeError::BadMagic)));
+    }
+
+    #[test]
+    fn load_bytecode_input_no_longer_reads_files() {
+        // Earlier revisions accepted `@/path/to/file` to read raw bytecode.
+        // That entry point is gone; `@…` should now be treated as hex input
+        // and fail because `@` is not a hex digit.
+        match load_bytecode_input("@/etc/passwd") {
+            Err(BytecodeError::InvalidHex(_)) => {}
+            other => panic!("expected InvalidHex, got {other:?}"),
+        }
     }
 }
