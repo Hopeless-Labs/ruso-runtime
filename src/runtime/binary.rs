@@ -1,14 +1,13 @@
-//! Binary serialization of `BytecodeProgram` (magic `RUSO`, version 2).
+//! Binary serialization of `BytecodeProgram` (magic `RUSO`, version 1).
 //!
-//! # Version history
-//!
-//! - **v1** — initial format. `CmpValue::Number` was serialized as `u32`, so
-//!   values above `u32::MAX` were silently truncated. v1 readers no longer
-//!   exist in this codebase; the decoder rejects the version byte.
-//! - **v2** — `CmpValue::Number` is `u64`; HTTP method tag space expanded to
-//!   include `Head` (5) and `Options` (6). All untrusted list/count fields
-//!   are bounded against the remaining buffer to prevent OOM allocations from
-//!   a malicious or corrupt `.bc` file.
+//! While the crate is `0.1.0-dev` the v1 wire format is evolved in place
+//! rather than bumped — there are no released downstream consumers, so
+//! breaking changes are folded back into v1 directly. The current v1 layout
+//! encodes `CmpValue::Number` as `u64` (earlier revisions silently truncated
+//! to `u32`), assigns HTTP method tags 5 and 6 to `Head` and `Options`, and
+//! bounds every untrusted list/count against the remaining buffer so a
+//! malicious or corrupt `.bc` file cannot trigger OOM allocations. A
+//! version bump will happen at the first stable release.
 
 use std::collections::HashMap;
 
@@ -22,7 +21,7 @@ use crate::runtime::bytecode::{BytecodeProgram, Instr};
 use crate::runtime::spec::{CheckMetadata, HttpRequestSpec, ProbeKind, ProgramSpec};
 
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 1;
 
 #[derive(Debug, Error)]
 pub enum BytecodeError {
@@ -812,7 +811,7 @@ fn write_cmp_value(w: &mut Writer, value: &CmpValue) {
     match value {
         CmpValue::Number(n) => {
             w.u8(0);
-            // v2: full u64 — earlier revisions truncated to u32, silently
+            // Full u64 — earlier revisions truncated to u32, silently
             // mangling comparisons against values above ~4.3 billion (e.g.
             // `response_size > 5_000_000_000`).
             w.u64(*n);
@@ -1228,8 +1227,9 @@ mod tests {
 
     #[test]
     fn cmp_number_roundtrips_full_u64() {
-        // Regression for the v1 → v2 fix: writing wrapped to u32 and silently
-        // truncated large numbers. The v2 wire format preserves the full u64.
+        // Regression for the u32 → u64 widening: writing wrapped to u32 and
+        // silently truncated large numbers. The wire format preserves the
+        // full u64.
         let mut w = Writer::default();
         let value = CmpValue::Number(u64::MAX - 5);
         write_cmp_value(&mut w, &value);

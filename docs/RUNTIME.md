@@ -10,7 +10,7 @@ use ruso_runtime::{Executor, ExecutorConfig, BytecodeProgram};
 // From compiler
 let executor = Executor::from_bytecode(config, program)?;
 
-// From bytes (RUSO v2)
+// From bytes (RUSO v1)
 let executor = Executor::from_bytes(config, &bytes)?;
 
 let result = executor.run().await?;
@@ -198,7 +198,7 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 2. Compile a `.ruso` script and `Executor::from_bytecode` + manual run.  
 3. `format_human` / round-trip `encode` → `decode` for bytecode changes.
 
-Recompile stored `.bc` files when metadata wire layout changes. Bump `VERSION` when probe or instruction encoding changes — the v1 → v2 widening of `CmpValue::Number` to `u64` is the most recent example.
+Recompile stored `.bc` files when the wire layout changes. While the crate is `0.1.0-dev` the v1 format is evolved in place; `VERSION` will be bumped at the first stable release.
 
 ## IPv6 sockets
 

@@ -1,4 +1,4 @@
-# Bytecode and opcodes (v2)
+# Bytecode and opcodes (v1)
 
 Compiled output is a `BytecodeProgram` defined in `ruso-runtime/src/runtime/bytecode.rs`. The on-disk / on-wire format is implemented in `runtime/binary.rs`.
 
@@ -6,15 +6,25 @@ Constants:
 
 ```rust
 pub const MAGIC: &[u8; 4] = b"RUSO";
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 1;
 ```
 
-## Version history
+## Pre-release status
 
-| Version | Changes |
-|---------|---------|
-| **v1** | Initial format. `CmpValue::Number` was written as `u32` and silently truncated values above `u32::MAX`. Discontinued. |
-| **v2** | `CmpValue::Number` is `u64`. HTTP method tag space extended with `Head` (5) and `Options` (6). Every length-prefixed list is bounded against the remaining buffer in the decoder, so a malicious `.bc` file can no longer trigger multi-GB allocations from a `u32::MAX` count. |
+The crate is `0.1.0-dev`. The v1 wire format is **evolved in place** during
+development — breaking changes are folded back into v1 directly rather than
+bumping the version byte, because there are no released downstream consumers
+yet. Recompile your `.bc` files after pulling. A formal version bump will
+happen at the first stable release.
+
+The current v1 layout:
+
+- Encodes `CmpValue::Number` as `u64` (earlier development revisions
+  truncated to `u32`).
+- Assigns HTTP method tags 5 and 6 to `Head` and `Options`.
+- Bounds every untrusted list/count against the remaining buffer in the
+  decoder, so a malicious or corrupt `.bc` file cannot trigger OOM
+  allocations from a `u32::MAX` count.
 
 ## File layout
 
@@ -34,9 +44,9 @@ Sections are written in order:
 
 CLI `compile` emits hex; `exec` accepts hex files. The runtime
 `load_bytecode_input` helper used to accept an `@path` prefix to read a file
-directly; that overload was removed in v2 to keep file IO inside the CLI and
-prevent any caller from passing less-trusted hex text through a path-traversal
-sink.
+directly; that overload has been removed to keep file IO inside the CLI and
+prevent any caller from passing less-trusted hex text through a
+path-traversal sink.
 
 ## Bounded counts (decoder hardening)
 
@@ -66,8 +76,8 @@ allocation, not after.
 | 2 | `PUT` |
 | 3 | `PATCH` |
 | 4 | `DELETE` |
-| 5 | `HEAD`    *(v2)* |
-| 6 | `OPTIONS` *(v2)* |
+| 5 | `HEAD` |
+| 6 | `OPTIONS` |
 
 ## Probe kinds (wire tag)
 
@@ -122,7 +132,7 @@ Wire opcode byte → `Instr` variant:
 
 Public constants: `ruso_runtime::opcode::{OP_*}`.
 
-## CmpValue encoding (v2)
+## CmpValue encoding
 
 | Tag | Variant | Wire |
 |-----|---------|------|
@@ -130,9 +140,9 @@ Public constants: `ruso_runtime::opcode::{OP_*}`.
 | 1 | `String(String)` | length-prefixed UTF-8 |
 | 2 | `Duration(String)` | length-prefixed UTF-8 |
 
-The `Number` payload widened from `u32` to `u64` in v2. Scripts that compare
-against values above ~4.3 billion (e.g. `response_size > 5_000_000_000`)
-now round-trip without silent truncation.
+The `Number` payload is encoded as `u64`. Earlier in-development revisions
+truncated to `u32`; scripts that compare against values above ~4.3 billion
+(e.g. `response_size > 5_000_000_000`) now round-trip without silent loss.
 
 ## Control-flow patching
 
@@ -212,8 +222,9 @@ let executor = Executor::from_bytecode(config, program)?;
 let result = executor.run().await?;
 ```
 
-Compilers **must** target `VERSION` 2. Recompile stored `.bc` files when the
-runtime is upgraded across a version bump.
+Compilers **must** target `VERSION` 1. While `0.1.0-dev` the v1 wire format
+may change between commits without a version bump — recompile stored `.bc`
+files after pulling.
 
 ## Design note: why not more opcodes?
 
