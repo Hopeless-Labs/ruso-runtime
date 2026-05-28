@@ -182,8 +182,11 @@ Written in order after the header (`MAGIC` + `VERSION`):
 | `mitigation` | `u32` count + strings |
 | `tags` | `u32` count + strings (discovery labels) |
 | `version` | optional UTF-8 string (SemVer, required at publish) |
+| `family` | optional UTF-8 string (single curated category) |
 
 Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable metadata lines in `.ruso` append to these lists at compile time.
+
+`version` and `family` are written at the tail of the metadata block via `opt_str` (a `0`/`1` presence byte then the string). They were appended in place during `0.1.0-dev` without bumping the version byte — older `.bc` that predate them simply won't have the trailing bytes, so always recompile after pulling.
 
 ## Pools and IDs
 
