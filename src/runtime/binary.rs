@@ -341,6 +341,10 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     write_strings(w, &metadata.mitigation);
     write_strings(w, &metadata.tags);
     w.opt_str(&metadata.version);
+    // Appended at the tail of the v1 metadata block (no VERSION bump —
+    // the format is evolved in place during 0.1.0-dev, same as tags +
+    // version were).
+    w.opt_str(&metadata.family);
 }
 
 fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
@@ -363,6 +367,7 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
         mitigation: read_strings(r)?,
         tags: read_strings(r)?,
         version: r.opt_str()?,
+        family: r.opt_str()?,
     })
 }
 
@@ -1337,6 +1342,7 @@ mod tests {
             mitigation: vec!["patch".into()],
             tags: vec!["auth".into(), "rce".into()],
             version: Some("1.2.3".into()),
+            family: Some("web".into()),
         };
         let mut w = Writer::default();
         write_metadata(&mut w, &metadata);
@@ -1347,6 +1353,7 @@ mod tests {
         assert_eq!(decoded.mitigation, vec!["patch"]);
         assert_eq!(decoded.severity, Some(Severity::High));
         assert_eq!(decoded.version.as_deref(), Some("1.2.3"));
+        assert_eq!(decoded.family.as_deref(), Some("web"));
     }
 
     #[test]

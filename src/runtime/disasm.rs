@@ -108,6 +108,9 @@ fn format_metadata(out: &mut String, metadata: &crate::runtime::spec::CheckMetad
     if let Some(version) = &metadata.version {
         writeln!(out, ";;   version: {version:?}").ok();
     }
+    if let Some(family) = &metadata.family {
+        writeln!(out, ";;   family: {family:?}").ok();
+    }
 }
 
 fn format_probe_kind(kind: &ProbeKind) -> String {

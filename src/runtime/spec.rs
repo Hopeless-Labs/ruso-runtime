@@ -95,6 +95,11 @@ pub struct CheckMetadata {
     pub mitigation: Vec<String>,
     pub tags: Vec<String>,
     pub version: Option<String>,
+    /// Single curated category (e.g. `web`, `network`, `database`).
+    /// Distinct from `tags`: one-per-script, used for "scan everything
+    /// in this family" selection. The allowed set is enforced by the
+    /// registry at publish time, not here.
+    pub family: Option<String>,
 }
 
 #[derive(Debug, Clone)]
