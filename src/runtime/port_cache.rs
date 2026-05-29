@@ -11,6 +11,8 @@ use tokio::time::timeout;
 
 use reqwest::Url;
 
+use crate::runtime::context::VariableValue;
+use crate::runtime::interpolate::interpolate;
 use crate::runtime::spec::{ProbeKind, ProgramSpec};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
@@ -59,12 +61,20 @@ impl PortCache {
 
     /// Endpoints to probe before running: socket probes in the spec plus `--target` host:port for HTTP checks.
     pub fn endpoints_for_run(spec: &ProgramSpec, base_url: &str) -> Vec<(String, u16)> {
+        // Socket probes may use the documented `host "{{scan_host}}"` form,
+        // which the executor resolves from `--target` at send-time. The
+        // pre-run port check must resolve it identically, or it would probe
+        // the literal placeholder, find it "closed", and skip the whole run.
+        let scan_vars = scan_target_variables(base_url);
+        let resolve =
+            |host: &str| interpolate(host, &scan_vars).unwrap_or_else(|_| host.to_string());
+
         let mut out = Vec::new();
         for kind in spec.probes.values() {
             match kind {
                 ProbeKind::Tcp(socket) | ProbeKind::Udp(socket) => {
                     if let Some(port) = socket.port {
-                        out.push((normalize_host(&socket.host), port));
+                        out.push((normalize_host(&resolve(&socket.host)), port));
                     }
                 }
                 ProbeKind::Dns(socket) => {
@@ -72,7 +82,7 @@ impl PortCache {
                         continue;
                     }
                     let port = socket.port.unwrap_or(53);
-                    out.push((normalize_host(&socket.host), port));
+                    out.push((normalize_host(&resolve(&socket.host)), port));
                 }
                 ProbeKind::Http(_) => {}
             }
@@ -164,6 +174,28 @@ pub fn scan_target_host_port(base_url: &str) -> Option<(String, u16)> {
     Some((normalize_host(host), port))
 }
 
+/// Build the `{{scan_host}}` / `{{scan_port}}` / `{{scan_url}}` variables from
+/// the CLI `--target` (executor `base_url`). Mirrors the executor's
+/// `inject_scan_target_variables` so the pre-run port check resolves socket
+/// hosts the same way the send path does.
+fn scan_target_variables(base_url: &str) -> HashMap<String, VariableValue> {
+    let mut vars = HashMap::new();
+    if let Some((host, port)) = scan_target_host_port(base_url) {
+        vars.insert("scan_host".to_string(), VariableValue::String(host));
+        vars.insert(
+            "scan_port".to_string(),
+            VariableValue::String(port.to_string()),
+        );
+    }
+    if !base_url.is_empty() {
+        vars.insert(
+            "scan_url".to_string(),
+            VariableValue::String(base_url.to_string()),
+        );
+    }
+    vars
+}
+
 /// Canonicalize a host string so equivalent IPv6 representations
 /// (`::1`, `0:0:0:0:0:0:0:1`) and arbitrary case in hostnames share one
 /// cache entry. Falls back to the original string on unknown formats.
@@ -236,5 +268,38 @@ mod tests {
         let (host, port) = scan_target_host_port("http://[::1]:8080/api").unwrap();
         assert_eq!(host, "::1");
         assert_eq!(port, 8080);
+    }
+
+    fn tcp_spec(host: &str) -> ProgramSpec {
+        use crate::runtime::spec::{CheckMetadata, SocketProbeSpec};
+        let mut probes = std::collections::HashMap::new();
+        probes.insert(
+            "svc".to_string(),
+            ProbeKind::Tcp(SocketProbeSpec {
+                host: host.to_string(),
+                port: Some(6379),
+                ..SocketProbeSpec::default()
+            }),
+        );
+        ProgramSpec {
+            probes,
+            metadata: CheckMetadata::default(),
+        }
+    }
+
+    #[test]
+    fn endpoints_interpolate_scan_host_for_socket_probes() {
+        // The pre-run port check must resolve `{{scan_host}}` from --target,
+        // just like the send path — otherwise socket probes are wrongly skipped.
+        let eps = PortCache::endpoints_for_run(&tcp_spec("{{scan_host}}"), "http://127.0.0.1:6379");
+        assert_eq!(eps, vec![("127.0.0.1".to_string(), 6379)]);
+    }
+
+    #[test]
+    fn endpoints_keep_static_host_unchanged() {
+        // A hardcoded host has no placeholder and must pass through verbatim,
+        // with or without a --target (e.g. banner-grab probes).
+        let eps = PortCache::endpoints_for_run(&tcp_spec("scanme.example.com"), "");
+        assert_eq!(eps, vec![("scanme.example.com".to_string(), 6379)]);
     }
 }
