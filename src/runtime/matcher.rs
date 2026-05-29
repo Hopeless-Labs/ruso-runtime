@@ -13,9 +13,11 @@ pub enum CompiledMatcherRegex {
     /// Matcher does not use `regex` (Compare/Contains/NotContains/...), or its
     /// field kind has no regex variant.
     None,
-    /// Regex against an HTTP body (`http_probe.body regex '...'`). The body
-    /// is decoded as a `String`, so the text-flavor `Regex` is fine.
-    HttpBody(Regex),
+    /// Regex against a decoded-string HTTP field — the body
+    /// (`http_probe.body regex '...'`) or a header value
+    /// (`http_probe.header "X" regex '...'`). Both are `String`, so the
+    /// text-flavor `Regex` is the right choice.
+    Text(Regex),
     /// Regex against raw socket bytes (`tcp_probe.response regex '...'`).
     /// Uses the `bytes` flavor so patterns can match non-UTF-8 payloads.
     SocketBytes(BytesRegex),
@@ -26,8 +28,8 @@ impl CompiledMatcherRegex {
     /// dispatching to text vs bytes flavor based on field kind.
     pub fn compile(matcher: &QualifiedMatch) -> Result<Self, RuntimeError> {
         match (&matcher.field.kind, &matcher.predicate) {
-            (FieldKind::Body, MatchPredicate::Regex(pattern)) => {
-                Ok(Self::HttpBody(Regex::new(pattern)?))
+            (FieldKind::Body | FieldKind::Header(_), MatchPredicate::Regex(pattern)) => {
+                Ok(Self::Text(Regex::new(pattern)?))
             }
             (FieldKind::Response | FieldKind::Banner, MatchPredicate::Regex(pattern)) => {
                 Ok(Self::SocketBytes(BytesRegex::new(pattern)?))
@@ -78,12 +80,26 @@ pub fn evaluate(
                 .map_err(|_| RuntimeError::WrongProbeKind {
                     name: field.target.clone(),
                 })?;
-            let CompiledMatcherRegex::HttpBody(regex) = compiled_regex else {
+            let CompiledMatcherRegex::Text(regex) = compiled_regex else {
                 return Err(RuntimeError::Other(
                     "regex matcher missing pre-compiled http body regex".into(),
                 ));
             };
             Ok(regex.is_match(&http.body))
+        }
+        (FieldKind::Header(name), MatchPredicate::Regex(_)) => {
+            let http = response
+                .as_http()
+                .map_err(|_| RuntimeError::WrongProbeKind {
+                    name: field.target.clone(),
+                })?;
+            let header = find_header(&http.headers, name);
+            let CompiledMatcherRegex::Text(regex) = compiled_regex else {
+                return Err(RuntimeError::Other(
+                    "regex matcher missing pre-compiled header regex".into(),
+                ));
+            };
+            Ok(regex.is_match(&header))
         }
         (FieldKind::Header(name), MatchPredicate::Contains(text)) => {
             let http = response
@@ -345,6 +361,40 @@ mod tests {
         assert!(evaluate(&matcher, &response, &compiled).unwrap());
     }
 
+    fn http_response_with_header(name: &str, value: &str) -> ProbeResponse {
+        use crate::runtime::response::HttpResponse;
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(name.to_string(), value.to_string());
+        ProbeResponse::Http(HttpResponse {
+            status: 200,
+            headers,
+            body: String::new(),
+            elapsed: std::time::Duration::from_millis(1),
+        })
+    }
+
+    #[test]
+    fn evaluate_regex_on_header_value() {
+        // Header values are decoded strings, so `header "X" regex '…'` uses the
+        // text-flavor regex. find_header is case-insensitive, so the script's
+        // "Server" matches the stored lowercase "server".
+        let matcher = QualifiedMatch {
+            field: QualifiedField {
+                target: "p".into(),
+                kind: FieldKind::Header("Server".into()),
+            },
+            predicate: MatchPredicate::Regex(r"nginx/[0-9]+\.[0-9]+".into()),
+        };
+        let compiled = CompiledMatcherRegex::compile(&matcher).unwrap();
+
+        let disclosed = http_response_with_header("server", "nginx/1.31.1");
+        assert!(evaluate(&matcher, &disclosed, &compiled).unwrap());
+
+        // `server_tokens off` → bare "nginx" has no version and must not match.
+        let suppressed = http_response_with_header("server", "nginx");
+        assert!(!evaluate(&matcher, &suppressed, &compiled).unwrap());
+    }
+
     #[test]
     fn compile_returns_none_for_non_regex_predicate() {
         let matcher = matcher_response_contains("anything");
@@ -365,7 +415,7 @@ mod tests {
         };
         assert!(matches!(
             CompiledMatcherRegex::compile(&http).unwrap(),
-            CompiledMatcherRegex::HttpBody(_)
+            CompiledMatcherRegex::Text(_)
         ));
 
         let sock = QualifiedMatch {
