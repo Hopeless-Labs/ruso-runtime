@@ -21,7 +21,7 @@ New protocol family unrelated to HTTP/socket bytes?
 ## Adding a check (script only)
 
 1. Create `my_check.ruso` with metadata + probe + `send` + `match`.  
-2. `ruso parse --script my_check.ruso`  
+2. `ruso validate --script my_check.ruso`  
 3. Test with `ruso scan` against a lab target.  
 4. Ship the `.ruso` file; no runtime release required.
 
@@ -106,7 +106,7 @@ Types in `ruso-runtime/src/contract.rs` are shared with the compiler via `ruso_s
 - [ ] `cargo build` all three crates  
 - [ ] `cargo test -p ruso-script` (parser)  
 - [ ] `cargo test -p ruso-runtime` (unit tests)  
-- [ ] `ruso parse` on affected examples  
+- [ ] `ruso validate` on affected examples  
 - [ ] Round-trip `compile` → `decode` → `encode` for bytecode changes  
 - [ ] One live `scan` against lab service  
 

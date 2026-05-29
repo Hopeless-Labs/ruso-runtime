@@ -41,7 +41,7 @@ When a check matches, `finalize_finding()` builds one `Finding` from metadata pl
 
 ## Port reachability cache
 
-Before the VM runs, `Executor::run` probes every TCP port required by socket probes in the program spec (`tcp`, `udp`, wire-mode `dns`). Results live in a process-wide cache for **30 seconds** (`PortCache::global()`).
+Before the VM runs, `Executor::run` TCP-connect-probes the ports required by **`tcp`** probes in the program spec (plus the `--target` host:port for HTTP checks). Results live in a process-wide cache for **30 seconds** (`PortCache::global()`). `udp` and wire-mode `dns` probes are connectionless — a TCP connect to their port proves nothing about the UDP service, so they are *not* pre-checked and always run, bounded only by their own read timeout.
 
 If any required port is closed (live probe or cache hit), **only that script run** is skipped:
 
