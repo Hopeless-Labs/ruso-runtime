@@ -6,7 +6,10 @@
 //! encodes `CmpValue::Number` as `u64` (earlier revisions silently truncated
 //! to `u32`), assigns HTTP method tags 5 and 6 to `Head` and `Options`, and
 //! bounds every untrusted list/count against the remaining buffer so a
-//! malicious or corrupt `.bc` file cannot trigger OOM allocations. A
+//! malicious or corrupt `.bc` file cannot trigger OOM allocations. After
+//! decoding, [`validate_program`] bounds-checks every instruction operand
+//! against its pool so out-of-range indices surface as `Corrupt` rather
+//! than panicking the executor that indexes those pools directly. A
 //! version bump will happen at the first stable release.
 
 use std::collections::HashMap;
@@ -70,7 +73,7 @@ pub fn decode(bytes: &[u8]) -> Result<BytecodeProgram, BytecodeError> {
     if r.remaining() != 0 {
         return Err(BytecodeError::Corrupt("trailing bytes"));
     }
-    Ok(BytecodeProgram {
+    let program = BytecodeProgram {
         spec: ProgramSpec { probes, metadata },
         code,
         strings,
@@ -78,7 +81,107 @@ pub fn decode(bytes: &[u8]) -> Result<BytecodeProgram, BytecodeError> {
         matchers,
         extracts,
         evidence,
-    })
+    };
+    validate_program(&program)?;
+    Ok(program)
+}
+
+/// Bounds-check every instruction operand against the pool it indexes.
+///
+/// The decode helpers above guarantee no out-of-buffer reads and no OOM
+/// allocations, but they do **not** check that an instruction's operand
+/// indices (`strings[name]`, `payloads[id]`, `matchers[start..start+len]`,
+/// …) actually fall within the decoded pools — those indices are plain
+/// `u32`s in the code stream. The executor indexes the pools directly, so
+/// an unchecked out-of-range index would panic the worker thread. A
+/// malicious or corrupt `.bc` (e.g. `ruso run evil.bc`) must surface as a
+/// clean `Corrupt` error, not a panic. This pass closes that gap so the
+/// "untrusted bytecode is safe to decode" guarantee holds end to end.
+///
+/// Jump targets (`else_pc`, `end_pc`) are deliberately *not* rejected when
+/// they point past `code`: the executor's main loop halts once `pc >=
+/// code.len()`, so an out-of-range jump simply ends execution rather than
+/// reading out of bounds.
+fn validate_program(p: &BytecodeProgram) -> Result<(), BytecodeError> {
+    let strings = p.strings.len();
+    let payloads = p.payloads.len();
+    let matchers = p.matchers.len();
+    let extracts = p.extracts.len();
+    let evidence = p.evidence.len();
+
+    // `idx < bound` with the index widened to usize so a u32 operand can
+    // never wrap; `range` additionally rejects start+len overflow.
+    let one = |idx: u32, bound: usize| -> Result<(), BytecodeError> {
+        if (idx as usize) < bound {
+            Ok(())
+        } else {
+            Err(BytecodeError::Corrupt("operand index out of range"))
+        }
+    };
+    let range = |start: u32, len: u16, bound: usize| -> Result<(), BytecodeError> {
+        let end = (start as usize)
+            .checked_add(len as usize)
+            .ok_or(BytecodeError::Corrupt("operand range overflow"))?;
+        if end <= bound {
+            Ok(())
+        } else {
+            Err(BytecodeError::Corrupt("operand range out of bounds"))
+        }
+    };
+
+    for instr in &p.code {
+        match instr {
+            Instr::Set { name, value } => {
+                one(*name, strings)?;
+                one(*value, strings)?;
+            }
+            Instr::SetList { name, start, len } => {
+                one(*name, strings)?;
+                range(*start, *len, strings)?;
+            }
+            Instr::Send { probe, payload } => {
+                one(*probe, strings)?;
+                if let Some(id) = payload {
+                    one(*id, payloads)?;
+                }
+            }
+            Instr::Match(m) | Instr::Assert(m) => one(*m, matchers)?,
+            Instr::MatchAll { start, len } | Instr::MatchAny { start, len } => {
+                range(*start, *len, matchers)?;
+            }
+            Instr::Extract { name, source } => {
+                one(*name, strings)?;
+                one(*source, extracts)?;
+            }
+            Instr::IfMatch { matcher, .. } => one(*matcher, matchers)?,
+            Instr::ForList {
+                item, start, len, ..
+            } => {
+                one(*item, strings)?;
+                range(*start, *len, strings)?;
+            }
+            Instr::ForVar { item, list, .. } => {
+                one(*item, strings)?;
+                one(*list, strings)?;
+            }
+            Instr::Save { from, to } => {
+                one(*from, strings)?;
+                one(*to, strings)?;
+            }
+            Instr::Evidence(k) => one(*k, evidence)?,
+            Instr::Retry { probe, .. } => one(*probe, strings)?,
+            Instr::RetryDelay(v) | Instr::Sleep(v) => one(*v, strings)?,
+            // Operand-free / jump-only instructions: nothing to bound here.
+            Instr::Repeat { .. }
+            | Instr::LoopBack
+            | Instr::Break
+            | Instr::Stop
+            | Instr::Fail
+            | Instr::Continue
+            | Instr::Exit => {}
+        }
+    }
+    Ok(())
 }
 
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -1354,6 +1457,68 @@ mod tests {
         assert_eq!(decoded.severity, Some(Severity::High));
         assert_eq!(decoded.version.as_deref(), Some("1.2.3"));
         assert_eq!(decoded.family.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_string_index() {
+        // A `Set { name: 7, value: 0 }` over an empty string pool would
+        // panic the executor with an out-of-bounds index. decode() must
+        // reject it as Corrupt instead.
+        let program = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            code: vec![Instr::Set { name: 7, value: 0 }],
+            strings: vec![],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let bytes = encode(&program);
+        match decode(&bytes) {
+            Err(BytecodeError::Corrupt("operand index out of range")) => {}
+            other => panic!("expected operand-index Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_match_slice() {
+        let program = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            // MatchAll over [0,3) but the matcher pool is empty.
+            code: vec![Instr::MatchAll { start: 0, len: 3 }],
+            strings: vec![],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let bytes = encode(&program);
+        assert!(matches!(decode(&bytes), Err(BytecodeError::Corrupt(_))));
+    }
+
+    #[test]
+    fn decode_accepts_in_range_operands() {
+        let program = BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata::default(),
+            },
+            code: vec![Instr::Set { name: 0, value: 1 }],
+            strings: vec!["host".into(), "value".into()],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        };
+        let bytes = encode(&program);
+        let decoded = decode(&bytes).expect("valid operands round-trip");
+        assert_eq!(decoded.code.len(), 1);
     }
 
     #[test]

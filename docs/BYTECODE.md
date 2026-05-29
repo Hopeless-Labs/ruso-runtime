@@ -25,6 +25,10 @@ The current v1 layout:
 - Bounds every untrusted list/count against the remaining buffer in the
   decoder, so a malicious or corrupt `.bc` file cannot trigger OOM
   allocations from a `u32::MAX` count.
+- Bounds-checks every instruction operand index against its pool after
+  decoding (see [Operand validation](#operand-validation-decoder-hardening)),
+  so an out-of-range index surfaces as a `Corrupt` error instead of
+  panicking the executor.
 
 ## File layout
 
@@ -66,6 +70,22 @@ scanner before the rest of the buffer was inspected.
 The bound also applies to the length-prefixed `str` and `opt_bytes` readers,
 so an inner `len` field that overruns the buffer is rejected before the
 allocation, not after.
+
+## Operand validation (decoder hardening)
+
+Bounded counts stop OOM allocations, but they do not check that an
+instruction's operand indices land inside the decoded pools — those
+indices are plain `u32`s in the code stream, and the executor indexes
+`strings`, `payloads`, `matchers`, `extracts`, and `evidence` directly.
+An unchecked out-of-range index (e.g. `Set { name: u32::MAX }`) would
+panic the worker thread.
+
+After the whole program is decoded, `validate_program` walks the code
+once and rejects any operand index `>= pool.len()` (and any
+`start + len` slice that overruns, computed in `usize` so it can't wrap)
+with a `Corrupt` error. Jump targets (`else_pc`, `end_pc`) are exempt:
+the executor's main loop halts once `pc >= code.len()`, so an
+out-of-range jump simply ends execution without reading out of bounds.
 
 ## HTTP methods (wire tag)
 
