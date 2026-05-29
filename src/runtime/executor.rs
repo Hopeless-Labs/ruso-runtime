@@ -601,7 +601,7 @@ impl Executor {
                 let port = spec
                     .port
                     .ok_or_else(|| RuntimeError::Other("tcp probe requires port".to_string()))?;
-                let payload = payload_override.or(spec.payload.clone());
+                let payload = payload_override.or_else(|| spec.payload.clone());
                 ProbeResponse::Socket(
                     self.exchange_tcp_probe(
                         name,
@@ -619,7 +619,7 @@ impl Executor {
                 let port = spec
                     .port
                     .ok_or_else(|| RuntimeError::Other("udp probe requires port".to_string()))?;
-                let payload = payload_override.or(spec.payload.clone());
+                let payload = payload_override.or_else(|| spec.payload.clone());
                 ProbeResponse::Socket(
                     self.exchange_udp_probe(
                         name,
