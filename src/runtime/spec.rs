@@ -92,7 +92,10 @@ pub struct CheckMetadata {
     pub references: Vec<String>,
     pub cvss: Vec<String>,
     pub cvss_score: Vec<String>,
-    pub mitigation: Vec<String>,
+    /// Single free-text remediation note. The DSL rejects more than one
+    /// `mitigation` line per script at compile time (unlike `cve`/`cwe`/
+    /// `references`/`tags`, which accumulate into lists).
+    pub mitigation: Option<String>,
     pub tags: Vec<String>,
     pub version: Option<String>,
     /// Single curated category (e.g. `web`, `network`, `database`).

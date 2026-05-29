@@ -441,7 +441,7 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     write_strings(w, &metadata.references);
     write_strings(w, &metadata.cvss);
     write_strings(w, &metadata.cvss_score);
-    write_strings(w, &metadata.mitigation);
+    w.opt_str(&metadata.mitigation);
     write_strings(w, &metadata.tags);
     w.opt_str(&metadata.version);
     // Appended at the tail of the v1 metadata block (no VERSION bump —
@@ -467,7 +467,7 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
         references: read_strings(r)?,
         cvss: read_strings(r)?,
         cvss_score: read_strings(r)?,
-        mitigation: read_strings(r)?,
+        mitigation: r.opt_str()?,
         tags: read_strings(r)?,
         version: r.opt_str()?,
         family: r.opt_str()?,
@@ -1442,7 +1442,7 @@ mod tests {
             references: vec!["https://example.com".into()],
             cvss: vec![],
             cvss_score: vec![],
-            mitigation: vec!["patch".into()],
+            mitigation: Some("patch".into()),
             tags: vec!["auth".into(), "rce".into()],
             version: Some("1.2.3".into()),
             family: Some("web".into()),
@@ -1453,7 +1453,7 @@ mod tests {
         let decoded = read_metadata(&mut r).unwrap();
         assert_eq!(decoded.tags, vec!["auth", "rce"]);
         assert_eq!(decoded.cve, vec!["CVE-2024-1"]);
-        assert_eq!(decoded.mitigation, vec!["patch"]);
+        assert_eq!(decoded.mitigation.as_deref(), Some("patch"));
         assert_eq!(decoded.severity, Some(Severity::High));
         assert_eq!(decoded.version.as_deref(), Some("1.2.3"));
         assert_eq!(decoded.family.as_deref(), Some("web"));

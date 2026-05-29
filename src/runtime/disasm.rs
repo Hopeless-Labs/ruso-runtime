@@ -99,7 +99,7 @@ fn format_metadata(out: &mut String, metadata: &crate::runtime::spec::CheckMetad
     for score in &metadata.cvss_score {
         writeln!(out, ";;   cvss_score: {score:?}").ok();
     }
-    for mitigation in &metadata.mitigation {
+    if let Some(mitigation) = &metadata.mitigation {
         writeln!(out, ";;   mitigation: {mitigation:?}").ok();
     }
     for tag in &metadata.tags {

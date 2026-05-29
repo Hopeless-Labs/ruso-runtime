@@ -13,7 +13,7 @@ pub struct Finding {
     pub references: Vec<String>,
     pub cvss: Vec<String>,
     pub cvss_score: Vec<String>,
-    pub mitigation: Vec<String>,
+    pub mitigation: Option<String>,
     pub evidence: Vec<String>,
 }
 
