@@ -72,19 +72,18 @@ impl PortCache {
         let mut out = Vec::new();
         for kind in spec.probes.values() {
             match kind {
-                ProbeKind::Tcp(socket) | ProbeKind::Udp(socket) => {
+                // Only connection-oriented TCP probes get a TCP-connect liveness
+                // pre-check. UDP and wire-DNS probes are sent as connectionless
+                // datagrams (`exchange_udp`), so a TCP connect to the same port
+                // proves nothing about the UDP service — and would wrongly skip
+                // the entire run for UDP-only hosts (NTP, SNMP, syslog, UDP-only
+                // resolvers, …). Those probes rely on their own read timeout.
+                ProbeKind::Tcp(socket) => {
                     if let Some(port) = socket.port {
                         out.push((normalize_host(&resolve(&socket.host)), port));
                     }
                 }
-                ProbeKind::Dns(socket) => {
-                    if socket.is_dns_resolver_mode() {
-                        continue;
-                    }
-                    let port = socket.port.unwrap_or(53);
-                    out.push((normalize_host(&resolve(&socket.host)), port));
-                }
-                ProbeKind::Http(_) => {}
+                ProbeKind::Udp(_) | ProbeKind::Dns(_) | ProbeKind::Http(_) => {}
             }
         }
 
@@ -301,5 +300,35 @@ mod tests {
         // with or without a --target (e.g. banner-grab probes).
         let eps = PortCache::endpoints_for_run(&tcp_spec("scanme.example.com"), "");
         assert_eq!(eps, vec![("scanme.example.com".to_string(), 6379)]);
+    }
+
+    fn single_probe_spec(kind: ProbeKind) -> ProgramSpec {
+        use crate::runtime::spec::CheckMetadata;
+        let mut probes = std::collections::HashMap::new();
+        probes.insert("svc".to_string(), kind);
+        ProgramSpec {
+            probes,
+            metadata: CheckMetadata::default(),
+        }
+    }
+
+    #[test]
+    fn udp_and_dns_probes_get_no_tcp_precheck() {
+        use crate::runtime::spec::SocketProbeSpec;
+        // UDP and wire-DNS are connectionless; a TCP-connect pre-check to their
+        // port proves nothing and would wrongly skip the run on UDP-only hosts.
+        let udp = single_probe_spec(ProbeKind::Udp(SocketProbeSpec {
+            host: "{{scan_host}}".into(),
+            port: Some(123),
+            ..SocketProbeSpec::default()
+        }));
+        assert!(PortCache::endpoints_for_run(&udp, "http://127.0.0.1").is_empty());
+
+        let dns = single_probe_spec(ProbeKind::Dns(SocketProbeSpec {
+            host: "{{scan_host}}".into(),
+            port: Some(53),
+            ..SocketProbeSpec::default()
+        }));
+        assert!(PortCache::endpoints_for_run(&dns, "http://127.0.0.1").is_empty());
     }
 }
