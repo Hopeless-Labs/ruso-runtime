@@ -26,6 +26,7 @@ pub use contract::{
 };
 pub use opcode::{BytecodeProgram, MAGIC, Opcode, Pc, VERSION};
 pub use runtime::duration::parse_duration;
+pub use runtime::http::build_client;
 pub use runtime::{
     BytecodeError, CheckMetadata, ExecutionResult, Executor, ExecutorConfig, Finding,
     HttpRequestSpec, PortCache, PortCheck, ProbeKind, ProgramSpec, Report, RuntimeError,
