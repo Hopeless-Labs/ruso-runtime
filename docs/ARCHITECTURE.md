@@ -62,9 +62,11 @@ Trade-off: very complex protocol state machines still need either richer generic
 
 ### `ruso-runtime`
 
-- **Public API**: `Executor`, `ExecutorConfig`, `BytecodeProgram`, `encode_bytecode` / `decode_bytecode`, `ProgramSpec`, `SocketProbeSpec`, contract types.
+- **Public API**: `Executor`, `ExecutorConfig`, `BytecodeProgram`, `encode_bytecode` / `decode_bytecode`, `ProgramSpec`, `SocketProbeSpec`, `RuntimeError`, `build_client`, contract types.
 - **Does not parse** `.ruso` source.
-- Owns all network I/O (reqwest, tokio sockets, tokio-rustls).
+- Owns all network I/O (reqwest, tokio sockets, tokio-rustls). `build_client`
+  is exported so a frontend can build a preflight/probe client with the same
+  TLS/proxy/redirect behaviour as the executor instead of hand-rolling one.
 
 Key modules:
 

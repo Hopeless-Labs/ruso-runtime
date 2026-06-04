@@ -183,6 +183,8 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 
 `RuntimeError` includes unknown probe, wrong probe kind for field, bytecode decode errors, flow `fail`, I/O timeouts, etc. The CLI maps these to exit codes and stderr.
 
+`RuntimeError::full_message()` returns the error joined with its full [`source`](https://doc.rust-lang.org/std/error/trait.Error.html#method.source) chain. The wrapped HTTP/I/O variants' `Display` shows only the top layer (`http error: error sending request for url (…)`); `full_message()` appends the real cause (`: client error (Connect): invalid peer certificate: UnknownIssuer`) so callers log it instead of an opaque line. The CLI uses it for every scan/exec failure.
+
 ## Dependencies
 
 | Crate | Use |
