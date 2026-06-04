@@ -100,10 +100,16 @@ mod tests {
 
     impl Layer {
         fn leaf(message: &'static str) -> Box<Self> {
-            Box::new(Self { message, source: None })
+            Box::new(Self {
+                message,
+                source: None,
+            })
         }
         fn wrap(message: &'static str, source: Box<Layer>) -> Self {
-            Self { message, source: Some(source) }
+            Self {
+                message,
+                source: Some(source),
+            }
         }
     }
 
@@ -121,7 +127,10 @@ mod tests {
 
     #[test]
     fn single_error_has_no_suffix() {
-        let err = Layer { message: "io error", source: None };
+        let err = Layer {
+            message: "io error",
+            source: None,
+        };
         assert_eq!(join_source_chain(&err), "io error");
     }
 
@@ -129,7 +138,10 @@ mod tests {
     fn joins_each_distinct_cause() {
         let err = Layer::wrap(
             "error sending request",
-            Box::new(Layer::wrap("client error (Connect)", Layer::leaf("invalid peer certificate"))),
+            Box::new(Layer::wrap(
+                "client error (Connect)",
+                Layer::leaf("invalid peer certificate"),
+            )),
         );
         assert_eq!(
             join_source_chain(&err),
@@ -142,8 +154,14 @@ mod tests {
         // reqwest repeats its top-level Display as its own first source.
         let err = Layer::wrap(
             "error sending request",
-            Box::new(Layer::wrap("error sending request", Layer::leaf("UnknownIssuer"))),
+            Box::new(Layer::wrap(
+                "error sending request",
+                Layer::leaf("UnknownIssuer"),
+            )),
         );
-        assert_eq!(join_source_chain(&err), "error sending request: UnknownIssuer");
+        assert_eq!(
+            join_source_chain(&err),
+            "error sending request: UnknownIssuer"
+        );
     }
 }
