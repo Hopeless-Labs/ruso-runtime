@@ -63,6 +63,7 @@ Other scripts in the same `ruso scan` continue. Scripts that share the same clos
 | `verify_ssl` | **true** | HTTP **and** TCP TLS (`tls true`) |
 | `proxy` | none | HTTP proxy URL |
 | `max_script_duration` | 5 minutes | Wall-clock budget per script (`None` disables) |
+| `http_retries` | 2 | Transient-transport retries per HTTP probe (`0` disables) |
 
 `verify_ssl` defaults to **true**. Earlier revisions defaulted to `false`
 ("scanner mode"), which made a freshly-constructed runtime open to MITM —
@@ -98,6 +99,8 @@ itself; that path is honoured verbatim.
 ### HTTP
 
 `execute_http` builds a reqwest request from `HttpRequestSpec` + `base_url`, returns `ProbeResponse::Http`. TLS verify follows `HttpRequestSpec.verify_ssl` when set, otherwise `ExecutorConfig.verify_ssl`.
+
+It retries a **transient transport failure** (connection reset, connect/read timeout — never a received response or a TLS-certificate rejection) up to `http_retries` times with a short backoff. A probe re-sent by the script's own `retry` directive passes `0` here, so author-controlled re-sends and the automatic transport retry never multiply.
 
 ### DNS
 

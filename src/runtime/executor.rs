@@ -48,9 +48,14 @@ pub struct ExecutorConfig {
     pub verify_ssl: bool,
     pub proxy: Option<String>,
     /// Wall-clock budget for a single script execution. `None` disables.
-    /// Defaults to 5 minutes so a hostile/buggy bytecode (`repeat u32::MAX
-    /// { sleep 1ms }`, deep loops, etc.) cannot pin a tokio worker.
+    /// Defaults to 5 minutes so a hostile/buggy bytecode (deep loops, long
+    /// `sleep`s, etc.) cannot pin a tokio worker.
     pub max_script_duration: Option<Duration>,
+    /// How many times to retry an HTTP probe that fails with a *transient*
+    /// transport error (connection reset, connect/read timeout) before giving
+    /// up. `0` disables. A probe driven by the script's own `retry` directive
+    /// is exempt — the author controls retries there. Defaults to `2`.
+    pub http_retries: u32,
 }
 
 impl Default for ExecutorConfig {
@@ -64,6 +69,7 @@ impl Default for ExecutorConfig {
             verify_ssl: true,
             proxy: None,
             max_script_duration: Some(Duration::from_secs(300)),
+            http_retries: 2,
         }
     }
 }
@@ -247,8 +253,13 @@ impl Executor {
                     let payload_override =
                         payload.map(|id| self.program.payloads[id as usize].clone());
                     tracing::trace!(probe = %name, "send");
-                    self.send_probe(name, payload_override, &mut context)
-                        .await?;
+                    self.send_probe(
+                        name,
+                        payload_override,
+                        self.config.http_retries,
+                        &mut context,
+                    )
+                    .await?;
                     pc += 1;
                 }
                 Instr::Match(matcher) => {
@@ -554,6 +565,7 @@ impl Executor {
         &self,
         name: &str,
         payload_override: Option<Vec<u8>>,
+        retries: u32,
         context: &mut Context,
     ) -> Result<(), RuntimeError> {
         let probe = self
@@ -579,6 +591,7 @@ impl Executor {
                     &spec,
                     &context.variables,
                     self.config.max_response_bytes,
+                    retries,
                 )
                 .await?;
                 ProbeResponse::Http(http)
@@ -751,7 +764,10 @@ impl Executor {
             if attempt > 0 {
                 tokio::time::sleep(delay).await;
             }
-            match self.send_probe(name, None, context).await {
+            // 0 auto-retries: the script's own `retry` directive controls
+            // re-sends here, so the transport layer must not multiply attempts
+            // underneath it.
+            match self.send_probe(name, None, 0, context).await {
                 Ok(()) => return Ok(()),
                 Err(err) => last_error = Some(err),
             }

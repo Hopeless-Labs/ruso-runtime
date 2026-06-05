@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use reqwest::header::HeaderMap;
@@ -21,6 +21,7 @@ pub async fn execute_http(
     spec: &HttpRequestSpec,
     variables: &HashMap<String, VariableValue>,
     max_response_bytes: usize,
+    retries: u32,
 ) -> Result<HttpResponse, RuntimeError> {
     let raw_path = spec.path.as_str();
     let path = interpolate(raw_path, variables)?;
@@ -76,9 +77,7 @@ pub async fn execute_http(
 
     builder = apply_body(builder, spec, variables)?;
 
-    let started = Instant::now();
-    let response = builder.send().await?;
-    let elapsed = started.elapsed();
+    let (response, elapsed) = send_with_retries(builder, retries).await?;
     let status = response.status().as_u16();
     let headers = flatten_headers(response.headers());
     let body = read_body_capped(response, max_response_bytes).await?;
@@ -126,6 +125,75 @@ async fn read_body_capped(
         }
     }
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Send `builder`, retrying transient transport failures up to `retries` times.
+///
+/// Returns the response and the elapsed time of the attempt that produced it
+/// (backoff waits are excluded, so `response_time` matchers stay meaningful).
+/// Only connection-level failures are retried — a reset peer or a connect/read
+/// timeout — never a received HTTP response (any status) or a permanent TLS
+/// certificate rejection. Each retry clones the request; a non-cloneable
+/// (streaming) body is sent once.
+async fn send_with_retries(
+    builder: RequestBuilder,
+    retries: u32,
+) -> Result<(reqwest::Response, Duration), reqwest::Error> {
+    let mut attempt = 0u32;
+    loop {
+        // Clone for every attempt except the last so `builder` survives to
+        // retry; on the last attempt (or a non-cloneable body) consume it.
+        let cloned = if attempt < retries {
+            builder.try_clone()
+        } else {
+            None
+        };
+        let Some(request) = cloned else {
+            let started = Instant::now();
+            return builder.send().await.map(|resp| (resp, started.elapsed()));
+        };
+
+        let started = Instant::now();
+        match request.send().await {
+            Ok(response) => return Ok((response, started.elapsed())),
+            Err(err) if is_transient(&err) => {
+                attempt += 1;
+                tokio::time::sleep(retry_backoff(attempt)).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// Backoff before retry attempt `n` (1-based): 300ms, 800ms, then 1.5s.
+fn retry_backoff(n: u32) -> Duration {
+    match n {
+        1 => Duration::from_millis(300),
+        2 => Duration::from_millis(800),
+        _ => Duration::from_millis(1500),
+    }
+}
+
+/// Whether a failed request is worth retrying: a timeout, or a connection-level
+/// failure that is *not* a TLS certificate rejection (those are permanent —
+/// retrying only repeats the same handshake error).
+fn is_transient(err: &reqwest::Error) -> bool {
+    if err.is_timeout() {
+        return true;
+    }
+    err.is_connect() && !error_mentions(err, "certificate")
+}
+
+/// Case-insensitive search for `needle` across an error's full source chain.
+fn error_mentions(err: &reqwest::Error, needle: &str) -> bool {
+    let mut source: Option<&dyn std::error::Error> = Some(err);
+    while let Some(cause) = source {
+        if cause.to_string().to_ascii_lowercase().contains(needle) {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 pub fn build_client(
@@ -335,5 +403,63 @@ mod tests {
         headers.insert("x-foo", HeaderValue::from_static("bar"));
         let flat = flatten_headers(&headers);
         assert_eq!(flat.get("x-foo").map(String::as_str), Some("bar"));
+    }
+
+    /// Localhost server that stalls the first connection past the probe timeout
+    /// (a transient failure), then answers every later connection with 200 OK.
+    /// Each connection is handled on its own thread so `accept` never blocks.
+    fn spawn_stall_then_ok_server() -> u16 {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicU32::new(0));
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let seen = seen.clone();
+                std::thread::spawn(move || {
+                    let mut stream = stream;
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        std::thread::sleep(Duration::from_secs(2));
+                        return;
+                    }
+                    let mut buf = [0u8; 512];
+                    let _ = stream.read(&mut buf);
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+                });
+            }
+        });
+        port
+    }
+
+    fn probe_spec() -> HttpRequestSpec {
+        HttpRequestSpec {
+            method: HttpMethod::Get,
+            path: "/".into(),
+            timeout: Some("700ms".into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_recover_a_transient_failure() {
+        let base = format!("http://127.0.0.1:{}", spawn_stall_then_ok_server());
+        let client = build_client(None, false, true, None).unwrap();
+        let result = execute_http(&client, &base, &probe_spec(), &HashMap::new(), 1 << 20, 2).await;
+        assert!(result.is_ok(), "retry should recover; got {result:?}");
+        assert_eq!(result.unwrap().status, 200);
+    }
+
+    #[tokio::test]
+    async fn zero_retries_surfaces_the_transient_failure() {
+        // 0 retries is what a probe driven by the script's own `retry` gets:
+        // the single stalled attempt must fail rather than silently retrying.
+        let base = format!("http://127.0.0.1:{}", spawn_stall_then_ok_server());
+        let client = build_client(None, false, true, None).unwrap();
+        let result = execute_http(&client, &base, &probe_spec(), &HashMap::new(), 1 << 20, 0).await;
+        assert!(result.is_err(), "with no retries the failure must surface");
     }
 }
