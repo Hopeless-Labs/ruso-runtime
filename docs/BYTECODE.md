@@ -9,13 +9,30 @@ pub const MAGIC: &[u8; 4] = b"RUSO";
 pub const VERSION: u8 = 1;
 ```
 
-## Pre-release status
+## Versioning policy
 
-The crate is `0.1.0-dev`. The v1 wire format is **evolved in place** during
-development — breaking changes are folded back into v1 directly rather than
-bumping the version byte, because there are no released downstream consumers
-yet. Recompile your `.bc` files after pulling. A formal version bump will
-happen at the first stable release.
+The header carries a one-byte `VERSION` (currently **1**). The decoder accepts
+**only** that exact version; anything else is rejected up front with
+`BytecodeError::BadVersion { found, supported }` ("unsupported bytecode version
+N (this build reads version M)") — never a cryptic mid-decode `Corrupt` error.
+
+**Any change to the wire format must bump `VERSION`.** Early-development
+revisions evolved the v1 layout *in place* without bumping (folding changes back
+into v1), which is why a stale `.bc` could fail to decode with an opaque "string
+length exceeds buffer" instead of a clean version error. That era is over: now
+that bytecode is cached locally and distributed via the registry, a format
+change is a version bump.
+
+> A `VERSION` bump is a **coordinated** change: the registry must deploy the new
+> runtime and serve (re-compile) `VERSION`-N bytecode, otherwise clients on the
+> new version reject everything the registry still serves as old. The local
+> install cache self-heals (an undecodable entry is re-fetched), so once the
+> registry serves the new version, clients converge automatically.
+
+Removing an opcode is *not* a format change as long as the remaining opcode
+numbers are stable and no valid program used the removed one — those byte
+streams are identical. (That is why dropping `repeat`/`OP_REPEAT` left `VERSION`
+at 1; opcode 18 is reserved.)
 
 The current v1 layout:
 

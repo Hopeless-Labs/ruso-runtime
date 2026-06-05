@@ -32,8 +32,11 @@ pub enum BytecodeError {
     TooShort,
     #[error("invalid magic")]
     BadMagic,
-    #[error("unsupported version {0}")]
-    BadVersion(u8),
+    #[error(
+        "unsupported bytecode version {found} (this build reads version {supported}); \
+         recompile the script or update ruso"
+    )]
+    BadVersion { found: u8, supported: u8 },
     #[error("corrupt bytecode: {0}")]
     Corrupt(&'static str),
     #[error("invalid hex: {0}")]
@@ -60,7 +63,10 @@ pub fn decode(bytes: &[u8]) -> Result<BytecodeProgram, BytecodeError> {
     r.consume_magic()?;
     let version = r.u8()?;
     if version != VERSION {
-        return Err(BytecodeError::BadVersion(version));
+        return Err(BytecodeError::BadVersion {
+            found: version,
+            supported: VERSION,
+        });
     }
     let metadata = read_metadata(&mut r)?;
     let probes = read_probes(&mut r)?;
@@ -1410,7 +1416,10 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(MAGIC);
         buf.push(99); // unsupported version
-        assert!(matches!(decode(&buf), Err(BytecodeError::BadVersion(99))));
+        assert!(matches!(
+            decode(&buf),
+            Err(BytecodeError::BadVersion { found: 99, .. })
+        ));
     }
 
     #[test]
