@@ -294,19 +294,6 @@ impl Executor {
                         pc += 1;
                     }
                 }
-                Instr::Repeat { count, end_pc } => {
-                    if *count == 0 {
-                        pc = *end_pc as usize;
-                        continue;
-                    }
-                    context.loop_stack.push(LoopFrame {
-                        state: LoopState::Repeat { remaining: *count },
-                        head_pc: pc + 1,
-                        continue_pc: (*end_pc as usize).saturating_sub(1),
-                        end_pc: *end_pc as usize,
-                    });
-                    pc += 1;
-                }
                 Instr::ForList {
                     item,
                     start,
@@ -371,8 +358,6 @@ impl Executor {
                 }
                 Instr::LoopBack => {
                     enum LoopAction {
-                        Jump(usize),
-                        End(usize),
                         SetAndJump {
                             item: String,
                             value: String,
@@ -391,14 +376,6 @@ impl Executor {
                             .last_mut()
                             .ok_or_else(|| RuntimeError::Other("loop_back outside loop".into()))?;
                         match &mut frame.state {
-                            LoopState::Repeat { remaining } => {
-                                if *remaining > 1 {
-                                    *remaining -= 1;
-                                    LoopAction::Jump(frame.head_pc)
-                                } else {
-                                    LoopAction::End(frame.end_pc)
-                                }
-                            }
                             LoopState::ForEach {
                                 item,
                                 values,
@@ -424,13 +401,6 @@ impl Executor {
                     };
 
                     match action {
-                        LoopAction::Jump(head_pc) => {
-                            pc = head_pc;
-                        }
-                        LoopAction::End(end_pc) => {
-                            context.loop_stack.pop();
-                            pc = end_pc;
-                        }
                         LoopAction::SetAndJump {
                             item,
                             value,
@@ -455,9 +425,8 @@ impl Executor {
                         .loop_stack
                         .pop()
                         .ok_or_else(|| RuntimeError::Other("break outside loop".into()))?;
-                    if let LoopState::ForEach { item, previous, .. } = frame.state {
-                        context.restore_or_remove_variable(item, previous);
-                    }
+                    let LoopState::ForEach { item, previous, .. } = frame.state;
+                    context.restore_or_remove_variable(item, previous);
                     pc = frame.end_pc;
                 }
                 Instr::Save { from, to } => {
@@ -1149,25 +1118,20 @@ mod tests {
         assert_eq!(result.report.findings[0].name, "Metadata only");
     }
 
-    /// H6 regression: a script that does nothing but sleep in a `Repeat`
-    /// loop must terminate via the wall-clock budget rather than running
-    /// to completion (which, at `u32::MAX` iterations, would never happen).
+    /// The wall-clock budget is checked at instruction boundaries, so a script
+    /// with many steps must abort once it runs past the budget rather than
+    /// executing them all. (A long sequence of short sleeps stands in for any
+    /// long-running script now that the unbounded `repeat` loop is gone.)
     #[tokio::test]
-    async fn script_budget_aborts_runaway_repeat_sleep() {
+    async fn script_budget_aborts_a_long_run() {
         let bytecode = BytecodeProgram {
             spec: ProgramSpec {
                 probes: Default::default(),
                 metadata: CheckMetadata::default(),
             },
-            // strings[0] = "10ms" — duration for Sleep
-            code: vec![
-                Instr::Repeat {
-                    count: u32::MAX,
-                    end_pc: 3,
-                },
-                Instr::Sleep(0),
-                Instr::LoopBack,
-            ],
+            // strings[0] = "10ms" per sleep; 200 of them (~2s) far exceed the
+            // 50ms budget, so the boundary check fires after a handful.
+            code: vec![Instr::Sleep(0); 200],
             strings: vec!["10ms".into()],
             payloads: vec![],
             matchers: vec![],

@@ -32,7 +32,7 @@
 //! | 15   | Fail        | —                                |
 //! | 16   | Continue    | —                                |
 //! | 17   | Exit        | —                                |
-//! | 18   | Repeat      | `count: u32`, `end_pc: u32`      |
+//! | 18   | (reserved)  | was `Repeat`, removed            |
 //! | 19   | LoopBack    | —                                |
 //! | 20   | Break       | —                                |
 //! | 21   | SetList     | `name_id: u32`, `start: u32`, `len: u16` |
@@ -61,7 +61,7 @@ pub const OP_STOP: u8 = 14;
 pub const OP_FAIL: u8 = 15;
 pub const OP_CONTINUE: u8 = 16;
 pub const OP_EXIT: u8 = 17;
-pub const OP_REPEAT: u8 = 18;
+// 18 reserved: was `Repeat`, removed from the DSL and VM.
 pub const OP_LOOP_BACK: u8 = 19;
 pub const OP_BREAK: u8 = 20;
 pub const OP_SET_LIST: u8 = 21;

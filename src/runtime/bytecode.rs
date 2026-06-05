@@ -52,10 +52,6 @@ pub enum Instr {
         matcher: u32,
         else_pc: Pc,
     },
-    Repeat {
-        count: u32,
-        end_pc: Pc,
-    },
     ForList {
         item: u32,
         start: u32,

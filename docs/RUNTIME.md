@@ -73,8 +73,8 @@ exposes this as `--insecure` and emits a runtime warning when used. Per
 HTTP probe, `verify_ssl true|false` in the script overrides the global
 setting for that request only.
 
-`max_script_duration` puts a wall-clock cap on a single script run, so
-pathological bytecode (`repeat u32::MAX { sleep 10ms }`, runaway loops)
+`max_script_duration` puts a wall-clock cap on a single script run, so a
+long-running script (a `for` over a large list of slow probes, long `sleep`s)
 cannot pin a tokio worker. The executor checks the budget at the top of
 every VM instruction; on exceedance `run()` returns `RuntimeError::Other`
 with a message containing `"budget"`.

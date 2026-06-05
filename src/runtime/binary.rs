@@ -172,8 +172,7 @@ fn validate_program(p: &BytecodeProgram) -> Result<(), BytecodeError> {
             Instr::Retry { probe, .. } => one(*probe, strings)?,
             Instr::RetryDelay(v) | Instr::Sleep(v) => one(*v, strings)?,
             // Operand-free / jump-only instructions: nothing to bound here.
-            Instr::Repeat { .. }
-            | Instr::LoopBack
+            Instr::LoopBack
             | Instr::Break
             | Instr::Stop
             | Instr::Fail
@@ -1058,7 +1057,8 @@ const OP_STOP: u8 = 14;
 const OP_FAIL: u8 = 15;
 const OP_CONTINUE: u8 = 16;
 const OP_EXIT: u8 = 17;
-const OP_REPEAT: u8 = 18;
+// 18 reserved: was `Repeat`, removed. Decoding it now yields an unknown-opcode
+// error (no published bytecode uses it).
 const OP_LOOP_BACK: u8 = 19;
 const OP_BREAK: u8 = 20;
 const OP_SET_LIST: u8 = 21;
@@ -1133,11 +1133,6 @@ fn write_instr(w: &mut Writer, instr: &Instr) {
             w.u8(OP_IF_MATCH);
             w.u32(*matcher);
             w.u32(*else_pc);
-        }
-        Instr::Repeat { count, end_pc } => {
-            w.u8(OP_REPEAT);
-            w.u32(*count);
-            w.u32(*end_pc);
         }
         Instr::ForList {
             item,
@@ -1221,10 +1216,6 @@ fn read_instr(r: &mut Reader<'_>) -> Result<Instr, BytecodeError> {
         OP_IF_MATCH => Instr::IfMatch {
             matcher: r.u32()?,
             else_pc: r.u32()?,
-        },
-        OP_REPEAT => Instr::Repeat {
-            count: r.u32()?,
-            end_pc: r.u32()?,
         },
         OP_FOR_LIST => Instr::ForList {
             item: r.u32()?,

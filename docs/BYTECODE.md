@@ -143,7 +143,7 @@ Wire opcode byte → `Instr` variant:
 | 15 | `Fail` | — |
 | 16 | `Continue` | — |
 | 17 | `Exit` | — |
-| 18 | `Repeat` | `count: u32`, `end_pc: u32` |
+| 18 | *(reserved)* | was `Repeat`, removed |
 | 19 | `LoopBack` | — |
 | 20 | `Break` | — |
 | 21 | `SetList` | `name_id: u32`, `start: u32`, `len: u16` |
@@ -169,18 +169,18 @@ truncated to `u32`; scripts that compare against values above ~4.3 billion
 The compiler emits placeholders and patches PCs:
 
 - **`IfMatch`** — `else_pc` set after body is emitted.
-- **`Repeat`** — `end_pc` set after `LoopBack` is emitted.
+- **`ForList`** — `end_pc` set after `LoopBack` is emitted.
 
 Executor semantics:
 
-- **`Repeat`** — pushes `LoopFrame { remaining: count, head_pc: pc+1, end_pc }`, enters body.
-- **`LoopBack`** — decrements `remaining`; if `> 0`, jump to `head_pc`, else pop frame and continue after loop.
+- **`ForList`** — pushes a `LoopFrame` over the literal list, binding the item variable each iteration.
+- **`LoopBack`** — advances the `for` iterator; if more items remain, jump to `head_pc`, else pop frame and continue after loop.
 - **`Break`** — pop innermost frame, jump to `end_pc`.
 
 The executor also enforces a **wall-clock budget**
-(`ExecutorConfig::max_script_duration`, default 5 minutes). Pathological
-bytecode such as `Repeat { count: u32::MAX } Sleep "10ms" LoopBack` cannot
-keep a tokio worker busy beyond that budget.
+(`ExecutorConfig::max_script_duration`, default 5 minutes), checked at
+instruction boundaries, so a long-running script (e.g. a `for` over a large
+list of slow probes) cannot keep a tokio worker busy beyond that budget.
 
 ## Metadata section
 
@@ -256,6 +256,6 @@ files after pulling.
 Protocol-specific opcodes (`OP_SMTP`, `OP_REDIS`, …) would couple the VM to services. Ruso keeps:
 
 - **Data** in the probe table (payload bytes, ports, TLS flag).
-- **Control** in a small ISA (`Send`, `Match`, `Repeat`, …).
+- **Control** in a small ISA (`Send`, `Match`, `ForList`, …).
 
 New network behavior should prefer new **socket options** or **send overrides** before new opcodes.

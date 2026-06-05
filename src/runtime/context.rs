@@ -22,9 +22,6 @@ impl VariableValue {
 
 #[derive(Debug)]
 pub enum LoopState {
-    Repeat {
-        remaining: u32,
-    },
     ForEach {
         item: String,
         values: Vec<String>,

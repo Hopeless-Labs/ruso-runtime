@@ -40,7 +40,7 @@ Enterprise scanners often embed protocol logic in plugins. Ruso instead uses:
 | Layer | Responsibility |
 |-------|----------------|
 | **Probe table** | *What* to send (HTTP path, TCP payload, DNS wire bytes, …) |
-| **Instructions** | *When* to send and *how* to branch (`Send`, `Match`, `Repeat`, …) |
+| **Instructions** | *When* to send and *how* to branch (`Send`, `Match`, `ForList`, …) |
 
 There is a single network opcode:
 
@@ -170,7 +170,7 @@ HTTP uses a separate `HttpRequestSpec` because the model is request/response doc
 - `variables` — `set` / `extract`
 - `responses` — map probe name → `ProbeResponse`
 - `sessions` — open TCP/TLS or UDP sockets when `session true`
-- `loop_stack` — `Repeat` / `LoopBack` / `Break`
+- `loop_stack` — `ForList` / `LoopBack` / `Break`
 - `matched` — AND-chain for matchers until one fails
 - `evidence` — strings for the final finding
 
@@ -181,7 +181,7 @@ A finding is emitted when:
 1. Match chain stayed true (`context.matched`), and
 2. `finalize_finding()` runs at end of bytecode (metadata name/severity, optional advisory fields including `cve` / `cwe` / `references` / `cvss` / `cvss_score` / `mitigation`, plus evidence).
 
-Flow instructions: `stop` (halt, no finding), `exit` (halt, finalize finding), `fail` (error), `continue` (no-op), `break` (exit innermost `repeat`).
+Flow instructions: `stop` (halt, no finding), `exit` (halt, finalize finding), `fail` (error), `continue` (no-op), `break` (exit innermost `for`).
 
 ## What Ruso is not (yet)
 

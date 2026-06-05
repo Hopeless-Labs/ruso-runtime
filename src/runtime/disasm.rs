@@ -292,7 +292,6 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
         Instr::IfMatch { matcher, else_pc } => {
             format!("IfMatch [{}] else_pc={else_pc}", matcher)
         }
-        Instr::Repeat { count, end_pc } => format!("Repeat count={count} end_pc={end_pc}"),
         Instr::ForList {
             item,
             start,

@@ -25,7 +25,7 @@ New protocol family unrelated to HTTP/socket bytes?
 3. Test with `ruso scan` against a lab target.  
 4. Ship the `.ruso` file; no runtime release required.
 
-Use hex payload for binary protocols; `session` + `repeat` for multi-step dialogs.
+Use hex payload for binary protocols; `session` (and multiple `send`s) for multi-step dialogs.
 
 Optional `cve`, `cwe`, `references`, `cvss`, and `cvss_score` lines (repeatable) plus a single `mitigation` line (free text; declaring it more than once is a compile error) attach advisory IDs, CVSS vectors/scores, remediation text, and URLs to findings and CLI/JSON reports.
 
