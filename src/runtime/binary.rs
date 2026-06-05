@@ -451,9 +451,9 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     w.opt_str(&metadata.mitigation);
     write_strings(w, &metadata.tags);
     w.opt_str(&metadata.version);
-    // Appended at the tail of the v1 metadata block (no VERSION bump —
-    // the format is evolved in place during 0.1.0-dev, same as tags +
-    // version were).
+    // `family` is the last field of the v1 metadata block. It (and `tags` /
+    // `version` before it) was appended during early `0.1.0-dev` without a
+    // VERSION bump; any further wire-format change now bumps VERSION instead.
     w.opt_str(&metadata.family);
 }
 

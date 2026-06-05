@@ -204,7 +204,7 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 2. Compile a `.ruso` script and `Executor::from_bytecode` + manual run.  
 3. `format_human` / round-trip `encode` → `decode` for bytecode changes.
 
-Recompile stored `.bc` files when the wire layout changes. While the crate is `0.1.0-dev` the v1 format is evolved in place; `VERSION` will be bumped at the first stable release.
+Any change to the wire layout bumps `VERSION`, so a mismatched `.bc` is rejected with a clear `BadVersion` error rather than a cryptic decode failure (see [BYTECODE.md](BYTECODE.md) for the policy). Recompile stored `.bc` files after a bump.
 
 ## IPv6 sockets
 
