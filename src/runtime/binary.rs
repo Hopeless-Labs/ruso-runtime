@@ -1,16 +1,18 @@
 //! Binary serialization of `BytecodeProgram` (magic `RUSO`, version 1).
 //!
-//! While the crate is `0.1.0-dev` the v1 wire format is evolved in place
-//! rather than bumped — there are no released downstream consumers, so
-//! breaking changes are folded back into v1 directly. The current v1 layout
-//! encodes `CmpValue::Number` as `u64` (earlier revisions silently truncated
-//! to `u32`), assigns HTTP method tags 5 and 6 to `Head` and `Options`, and
-//! bounds every untrusted list/count against the remaining buffer so a
-//! malicious or corrupt `.bc` file cannot trigger OOM allocations. After
-//! decoding, [`validate_program`] bounds-checks every instruction operand
-//! against its pool so out-of-range indices surface as `Corrupt` rather
-//! than panicking the executor that indexes those pools directly. A
-//! version bump will happen at the first stable release.
+//! **Versioning:** the header carries a one-byte `VERSION`; the decoder accepts
+//! only that exact value, rejecting anything else up front with `BadVersion`
+//! (never a cryptic mid-decode `Corrupt`). Any change to the wire format must
+//! bump `VERSION` — a coordinated step, since the registry has to deploy the
+//! new runtime and serve re-compiled bytecode. See `docs/BYTECODE.md`.
+//!
+//! The current v1 layout encodes `CmpValue::Number` as `u64` (earlier revisions
+//! silently truncated to `u32`), assigns HTTP method tags 5 and 6 to `Head` and
+//! `Options`, and bounds every untrusted list/count against the remaining
+//! buffer so a malicious or corrupt `.bc` file cannot trigger OOM allocations.
+//! After decoding, [`validate_program`] bounds-checks every instruction operand
+//! against its pool so out-of-range indices surface as `Corrupt` rather than
+//! panicking the executor that indexes those pools directly.
 
 use std::collections::HashMap;
 
