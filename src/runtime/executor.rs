@@ -306,24 +306,7 @@ impl Executor {
                         .iter()
                         .map(|value| interpolate(value, &context.variables))
                         .collect::<Result<Vec<_>, _>>()?;
-                    if values.is_empty() {
-                        pc = *end_pc as usize;
-                        continue;
-                    }
-                    let previous = context.variables.get(&item).cloned();
-                    context.set_variable(item.clone(), values[0].clone());
-                    context.loop_stack.push(LoopFrame {
-                        state: LoopState::ForEach {
-                            item,
-                            values,
-                            index: 0,
-                            previous,
-                        },
-                        head_pc: pc + 1,
-                        continue_pc: (*end_pc as usize).saturating_sub(1),
-                        end_pc: *end_pc as usize,
-                    });
-                    pc += 1;
+                    pc = self.enter_foreach(&mut context, item, values, pc, *end_pc as usize);
                 }
                 Instr::ForVar { item, list, end_pc } => {
                     let item = self.program.strings[*item as usize].clone();
@@ -337,98 +320,10 @@ impl Executor {
                         }
                         None => Vec::new(),
                     };
-                    if values.is_empty() {
-                        pc = *end_pc as usize;
-                        continue;
-                    }
-                    let previous = context.variables.get(&item).cloned();
-                    context.set_variable(item.clone(), values[0].clone());
-                    context.loop_stack.push(LoopFrame {
-                        state: LoopState::ForEach {
-                            item,
-                            values,
-                            index: 0,
-                            previous,
-                        },
-                        head_pc: pc + 1,
-                        continue_pc: (*end_pc as usize).saturating_sub(1),
-                        end_pc: *end_pc as usize,
-                    });
-                    pc += 1;
+                    pc = self.enter_foreach(&mut context, item, values, pc, *end_pc as usize);
                 }
-                Instr::LoopBack => {
-                    enum LoopAction {
-                        SetAndJump {
-                            item: String,
-                            value: String,
-                            head_pc: usize,
-                        },
-                        RestoreAndEnd {
-                            item: String,
-                            previous: Option<VariableValue>,
-                            end_pc: usize,
-                        },
-                    }
-
-                    let action = {
-                        let frame = context
-                            .loop_stack
-                            .last_mut()
-                            .ok_or_else(|| RuntimeError::Other("loop_back outside loop".into()))?;
-                        match &mut frame.state {
-                            LoopState::ForEach {
-                                item,
-                                values,
-                                index,
-                                previous,
-                            } => {
-                                if *index + 1 < values.len() {
-                                    *index += 1;
-                                    LoopAction::SetAndJump {
-                                        item: item.clone(),
-                                        value: values[*index].clone(),
-                                        head_pc: frame.head_pc,
-                                    }
-                                } else {
-                                    LoopAction::RestoreAndEnd {
-                                        item: item.clone(),
-                                        previous: previous.clone(),
-                                        end_pc: frame.end_pc,
-                                    }
-                                }
-                            }
-                        }
-                    };
-
-                    match action {
-                        LoopAction::SetAndJump {
-                            item,
-                            value,
-                            head_pc,
-                        } => {
-                            context.set_variable(item, value);
-                            pc = head_pc;
-                        }
-                        LoopAction::RestoreAndEnd {
-                            item,
-                            previous,
-                            end_pc,
-                        } => {
-                            context.loop_stack.pop();
-                            context.restore_or_remove_variable(item, previous);
-                            pc = end_pc;
-                        }
-                    }
-                }
-                Instr::Break => {
-                    let frame = context
-                        .loop_stack
-                        .pop()
-                        .ok_or_else(|| RuntimeError::Other("break outside loop".into()))?;
-                    let LoopState::ForEach { item, previous, .. } = frame.state;
-                    context.restore_or_remove_variable(item, previous);
-                    pc = frame.end_pc;
-                }
+                Instr::LoopBack => pc = self.step_loop_back(&mut context)?,
+                Instr::Break => pc = self.step_break(&mut context)?,
                 Instr::Save { from, to } => {
                     let from = &self.program.strings[*from as usize];
                     let to = &self.program.strings[*to as usize];
@@ -475,14 +370,7 @@ impl Executor {
                     context.failed = true;
                     return Err(RuntimeError::Flow("fail".into()));
                 }
-                Instr::Continue => {
-                    let continue_pc = context
-                        .loop_stack
-                        .last()
-                        .ok_or_else(|| RuntimeError::Other("continue outside loop".into()))?
-                        .continue_pc;
-                    pc = continue_pc;
-                }
+                Instr::Continue => pc = self.step_continue(&context)?,
             }
         }
 
@@ -499,6 +387,122 @@ impl Executor {
             variables: context.variables,
             metadata: context.metadata,
         })
+    }
+
+    /// Enter a `for` loop: bind `item` to the first value and push a loop
+    /// frame, or skip the body entirely when the list is empty. Returns the
+    /// next program counter — the loop body (`pc + 1`) or `end_pc`.
+    fn enter_foreach(
+        &self,
+        context: &mut Context,
+        item: String,
+        values: Vec<String>,
+        pc: usize,
+        end_pc: usize,
+    ) -> usize {
+        if values.is_empty() {
+            return end_pc;
+        }
+        let previous = context.variables.get(&item).cloned();
+        context.set_variable(item.clone(), values[0].clone());
+        context.loop_stack.push(LoopFrame {
+            state: LoopState::ForEach {
+                item,
+                values,
+                index: 0,
+                previous,
+            },
+            head_pc: pc + 1,
+            continue_pc: end_pc.saturating_sub(1),
+            end_pc,
+        });
+        pc + 1
+    }
+
+    /// Advance the innermost loop on `loop_back`: bind the next item and jump
+    /// to the loop head, or — when exhausted — pop the frame, restore the
+    /// shadowed variable, and continue past the loop. Returns the next pc.
+    fn step_loop_back(&self, context: &mut Context) -> Result<usize, RuntimeError> {
+        // Decide the action while borrowing the frame, then mutate `context`
+        // after that borrow ends (the two can't overlap).
+        enum Next {
+            Jump {
+                item: String,
+                value: String,
+                head_pc: usize,
+            },
+            End {
+                item: String,
+                previous: Option<VariableValue>,
+                end_pc: usize,
+            },
+        }
+        let next = {
+            let frame = context
+                .loop_stack
+                .last_mut()
+                .ok_or_else(|| RuntimeError::Other("loop_back outside loop".into()))?;
+            let LoopState::ForEach {
+                item,
+                values,
+                index,
+                previous,
+            } = &mut frame.state;
+            if *index + 1 < values.len() {
+                *index += 1;
+                Next::Jump {
+                    item: item.clone(),
+                    value: values[*index].clone(),
+                    head_pc: frame.head_pc,
+                }
+            } else {
+                Next::End {
+                    item: item.clone(),
+                    previous: previous.clone(),
+                    end_pc: frame.end_pc,
+                }
+            }
+        };
+        Ok(match next {
+            Next::Jump {
+                item,
+                value,
+                head_pc,
+            } => {
+                context.set_variable(item, value);
+                head_pc
+            }
+            Next::End {
+                item,
+                previous,
+                end_pc,
+            } => {
+                context.loop_stack.pop();
+                context.restore_or_remove_variable(item, previous);
+                end_pc
+            }
+        })
+    }
+
+    /// `break`: pop the innermost loop frame, restore its shadowed variable,
+    /// and return the program counter just past the loop (`end_pc`).
+    fn step_break(&self, context: &mut Context) -> Result<usize, RuntimeError> {
+        let frame = context
+            .loop_stack
+            .pop()
+            .ok_or_else(|| RuntimeError::Other("break outside loop".into()))?;
+        let LoopState::ForEach { item, previous, .. } = frame.state;
+        context.restore_or_remove_variable(item, previous);
+        Ok(frame.end_pc)
+    }
+
+    /// `continue`: jump to the innermost loop's `loop_back` (its `continue_pc`).
+    fn step_continue(&self, context: &Context) -> Result<usize, RuntimeError> {
+        Ok(context
+            .loop_stack
+            .last()
+            .ok_or_else(|| RuntimeError::Other("continue outside loop".into()))?
+            .continue_pc)
     }
 
     fn interpolate_socket_spec(
