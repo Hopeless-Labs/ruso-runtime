@@ -1,5 +1,6 @@
 # ruso-runtime
 
+> [!NOTE]
 > **Development status:** under active development. APIs, bytecode format, and
 > runtime behavior may change without notice. Not recommended for production use yet.
 
