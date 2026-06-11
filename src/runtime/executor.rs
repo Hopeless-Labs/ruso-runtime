@@ -1154,6 +1154,85 @@ mod tests {
         assert!(msg.contains("budget"), "expected budget error, got: {msg}");
     }
 
+    /// Build a `for x in ["a", "b", "c"] { <body> }` program. `body` is the
+    /// instructions between the `ForList` header and the trailing `LoopBack`;
+    /// a `Stop` is appended just past the loop so control flow has a clean
+    /// landing point. `end_pc` (one past `LoopBack`) is wired automatically.
+    fn foreach_program(body: Vec<Instr>) -> BytecodeProgram {
+        // Layout: [ForList][..body..][LoopBack][Stop]
+        let loop_back_pc = 1 + body.len();
+        let end_pc = loop_back_pc + 1; // one past LoopBack — where the loop exits to
+        let mut code = vec![Instr::ForList {
+            item: 0,
+            start: 1,
+            len: 3,
+            end_pc: end_pc as u32,
+        }];
+        code.extend(body);
+        code.push(Instr::LoopBack);
+        code.push(Instr::Stop);
+        BytecodeProgram {
+            spec: ProgramSpec {
+                probes: Default::default(),
+                metadata: CheckMetadata {
+                    name: Some("loop test".into()),
+                    ..CheckMetadata::default()
+                },
+            },
+            code,
+            strings: vec!["x".into(), "a".into(), "b".into(), "c".into()],
+            payloads: vec![],
+            matchers: vec![],
+            extracts: vec![],
+            evidence: vec![],
+        }
+    }
+
+    async fn run_offline(bytecode: BytecodeProgram) -> Result<(), RuntimeError> {
+        let config = ExecutorConfig {
+            base_url: "http://127.0.0.1".into(),
+            ..ExecutorConfig::default()
+        };
+        let executor = Executor::from_bytecode(config, bytecode).unwrap();
+        executor.run().await.map(|_| ())
+    }
+
+    // The next three tests pin down loop *execution* (ForList/LoopBack/Break/
+    // Continue) — the opcodes extracted into `enter_foreach`/`step_loop_back`/
+    // `step_break`/`step_continue`. They use `Instr::Fail` as a tripwire: any
+    // instruction the control flow should have skipped turns a pass into an
+    // error, so a regression can't slip through as a silent no-op.
+
+    #[tokio::test]
+    async fn foreach_iterates_every_value_and_exits() {
+        // Empty body: enter, three loop-backs, exhaust, fall through to Stop.
+        // A broken index/jump would panic (out-of-bounds) or hang (budget),
+        // so reaching a clean `Ok` proves all three iterations ran and the
+        // frame was popped exactly once.
+        run_offline(foreach_program(vec![]))
+            .await
+            .expect("foreach should iterate and exit cleanly");
+    }
+
+    #[tokio::test]
+    async fn foreach_break_skips_rest_of_body_and_loop() {
+        // `break` must jump past the `Fail` and out of the loop to `Stop`.
+        let body = vec![Instr::Break, Instr::Fail];
+        run_offline(foreach_program(body))
+            .await
+            .expect("break should exit before reaching Fail");
+    }
+
+    #[tokio::test]
+    async fn foreach_continue_skips_to_loop_back() {
+        // `continue` must jump to `LoopBack` (continue_pc), skipping the `Fail`,
+        // on every iteration — then the loop exhausts and exits to `Stop`.
+        let body = vec![Instr::Continue, Instr::Fail];
+        run_offline(foreach_program(body))
+            .await
+            .expect("continue should skip Fail on every iteration");
+    }
+
     #[tokio::test]
     async fn default_config_verifies_tls() {
         // C3 regression: ExecutorConfig::default() must verify TLS so a
