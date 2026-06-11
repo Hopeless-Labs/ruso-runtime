@@ -6,7 +6,7 @@ Guide for maintainers adding features without breaking the generic probe model.
 
 ```
 New vulnerability check for existing transport?
-  └─ Yes → add .ruso under examples/ or your checks repo (no Rust)
+  └─ Yes → add .rsl under examples/ or your checks repo (no Rust)
 
 New socket behavior (TLS client cert, SCTP, …)?
   └─ Extend SocketProbeSpec + session layer + grammar
@@ -20,10 +20,10 @@ New protocol family unrelated to HTTP/socket bytes?
 
 ## Adding a check (script only)
 
-1. Create `my_check.ruso` with metadata + probe + `send` + `match`.  
-2. `ruso validate --script my_check.ruso`  
+1. Create `my_check.rsl` with metadata + probe + `send` + `match`.  
+2. `ruso validate --script my_check.rsl`  
 3. Test with `ruso scan` against a lab target.  
-4. Ship the `.ruso` file; no runtime release required.
+4. Ship the `.rsl` file; no runtime release required.
 
 Use hex payload for binary protocols; `session` (and multiple `send`s) for multi-step dialogs.
 
@@ -41,9 +41,9 @@ Example: a new `tags` list on checks.
 | 4 | `spec.rs` — `CheckMetadata` field |
 | 5 | `binary.rs` — `write_metadata` / `read_metadata` (append at end of metadata block) |
 | 6 | `report.rs` / `disasm.rs` — `Finding` + listing |
-| 7 | `docs/DSL_REFERENCE.md`, `BYTECODE.md`, `RUNTIME.md` |
+| 7 | `docs/RSL_REFERENCE.md`, `BYTECODE.md`, `RUNTIME.md` |
 | 8 | `ruso-cli` `report.rs` if exposed in scan output |
-| 9 | Recompile all `.bc` files; bump `VERSION` only if probe or instruction layout changes |
+| 9 | Recompile all `.rbc` files; bump `VERSION` only if probe or instruction layout changes |
 
 ## Adding a socket probe option
 
@@ -59,10 +59,10 @@ Example: `connect_timeout 5s`.
 | 6 | `binary.rs` — encode/decode after existing fields |
 | 7 | `session.rs` / `executor.rs` — use value on connect |
 | 8 | `disasm.rs` — show in probe dump |
-| 9 | `docs/DSL_REFERENCE.md` — document |
+| 9 | `docs/RSL_REFERENCE.md` — document |
 | 10 | Bump `VERSION` if layout changes |
 
-Backward compatibility: old bytecode cannot read new fields—bump version and recompile all stored `.bc` files.
+Backward compatibility: old bytecode cannot read new fields—bump version and recompile all stored `.rbc` files.
 
 ## Adding an instruction
 
@@ -115,7 +115,7 @@ Types in `ruso-runtime/src/contract.rs` are shared with the compiler via `ruso_s
 | Avoid | Prefer |
 |-------|--------|
 | `OP_REDIS`, `OP_SMTP` | `tcp` + payload |
-| Forking executor per CVE | Parameterized `.ruso` |
+| Forking executor per CVE | Parameterized `.rsl` |
 | Raw SQL in scripts | Not applicable—keep I/O in runtime |
 | Breaking `VERSION` without bump | Explicit migration notes |
 
@@ -134,7 +134,7 @@ ruso-script = { git = "https://github.com/Hopeless-Labs/ruso-script.git", branch
 
 For local work on all three at once, clone them as siblings and temporarily use `path = "../ruso-*"` in `Cargo.toml`, or add a `[patch]` table in the crate you are building.
 
-When publishing to crates.io later, semver the runtime contract (`VERSION`, public types) independently from the DSL.
+When publishing to crates.io later, semver the runtime contract (`VERSION`, public types) independently from RSL.
 
 ## Future directions (not implemented)
 

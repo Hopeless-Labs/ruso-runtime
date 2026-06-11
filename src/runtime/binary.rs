@@ -9,7 +9,7 @@
 //! The current v1 layout encodes `CmpValue::Number` as `u64` (earlier revisions
 //! silently truncated to `u32`), assigns HTTP method tags 5 and 6 to `Head` and
 //! `Options`, and bounds every untrusted list/count against the remaining
-//! buffer so a malicious or corrupt `.bc` file cannot trigger OOM allocations.
+//! buffer so a malicious or corrupt `.rbc` file cannot trigger OOM allocations.
 //! After decoding, [`validate_program`] bounds-checks every instruction operand
 //! against its pool so out-of-range indices surface as `Corrupt` rather than
 //! panicking the executor that indexes those pools directly.
@@ -102,7 +102,7 @@ pub fn decode(bytes: &[u8]) -> Result<BytecodeProgram, BytecodeError> {
 /// …) actually fall within the decoded pools — those indices are plain
 /// `u32`s in the code stream. The executor indexes the pools directly, so
 /// an unchecked out-of-range index would panic the worker thread. A
-/// malicious or corrupt `.bc` (e.g. `ruso run evil.bc`) must surface as a
+/// malicious or corrupt `.rbc` (e.g. `ruso exec evil.rbc`) must surface as a
 /// clean `Corrupt` error, not a panic. This pass closes that gap so the
 /// "untrusted bytecode is safe to decode" guarantee holds end to end.
 ///

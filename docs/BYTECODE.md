@@ -18,7 +18,7 @@ N (this build reads version M)") — never a cryptic mid-decode `Corrupt` error.
 
 **Any change to the wire format must bump `VERSION`.** Early-development
 revisions evolved the v1 layout *in place* without bumping (folding changes back
-into v1), which is why a stale `.bc` could fail to decode with an opaque "string
+into v1), which is why a stale `.rbc` could fail to decode with an opaque "string
 length exceeds buffer" instead of a clean version error. That era is over: now
 that bytecode is cached locally and distributed via the registry, a format
 change is a version bump.
@@ -40,7 +40,7 @@ The current v1 layout:
   truncated to `u32`).
 - Assigns HTTP method tags 5 and 6 to `Head` and `Options`.
 - Bounds every untrusted list/count against the remaining buffer in the
-  decoder, so a malicious or corrupt `.bc` file cannot trigger OOM
+  decoder, so a malicious or corrupt `.rbc` file cannot trigger OOM
   allocations from a `u32::MAX` count.
 - Bounds-checks every instruction operand index against its pool after
   decoding (see [Operand validation](#operand-validation-decoder-hardening)),
@@ -210,7 +210,7 @@ Written in order after the header (`MAGIC` + `VERSION`):
 | `impact` | optional string |
 | `severity` | `u8` tag (0=absent, else 1–5 for low…critical) |
 | `author` | optional string |
-| `report_title` | optional string (`report` in DSL) |
+| `report_title` | optional string (`report` in RSL) |
 | `cve` | `u32` count + strings |
 | `cwe` | `u32` count + strings |
 | `references` | `u32` count + strings |
@@ -221,9 +221,9 @@ Written in order after the header (`MAGIC` + `VERSION`):
 | `version` | optional UTF-8 string (SemVer, required at publish) |
 | `family` | optional UTF-8 string (single curated category) |
 
-Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable metadata lines in `.ruso` append to these lists at compile time.
+Each string list uses the same `write_strings` / `read_strings` helper as the string pool (count, then length-prefixed UTF-8 per entry). Repeatable metadata lines in `.rsl` append to these lists at compile time.
 
-`version` and `family` are written at the tail of the metadata block via `opt_str` (a `0`/`1` presence byte then the string). They were appended in place during `0.1.0-dev` without bumping the version byte — older `.bc` that predate them simply won't have the trailing bytes, so always recompile after pulling.
+`version` and `family` are written at the tail of the metadata block via `opt_str` (a `0`/`1` presence byte then the string). They were appended in place during `0.1.0-dev` without bumping the version byte — older `.rbc` that predate them simply won't have the trailing bytes, so always recompile after pulling.
 
 ## Pools and IDs
 
@@ -265,7 +265,7 @@ let result = executor.run().await?;
 ```
 
 Compilers **must** target `VERSION` 1. While `0.1.0-dev` the v1 wire format
-may change between commits without a version bump — recompile stored `.bc`
+may change between commits without a version bump — recompile stored `.rbc`
 files after pulling.
 
 ## Design note: why not more opcodes?

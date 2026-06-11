@@ -28,7 +28,7 @@ during the pre-1.0 series; it will be frozen at the first stable release).
 
 ### Security
 - Decode-time validation of every instruction operand index against its pool.
-  A corrupt or malicious `.bc` can no longer panic the executor with an
+  A corrupt or malicious `.rbc` can no longer panic the executor with an
   out-of-bounds index; it surfaces as a clean `Corrupt` error.
 
 [0.1.0-beta.1]: https://github.com/Hopeless-Labs/ruso-runtime/releases/tag/v0.1.0-beta.1

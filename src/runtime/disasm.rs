@@ -242,7 +242,7 @@ fn format_instr(instr: &Instr, bytecode: &BytecodeProgram) -> String {
     // Use `.get()` rather than direct slicing so corrupt-but-decodable
     // bytecode (start/len pointing past the string pool) cannot panic the
     // disassembler — important because `ruso disasm` is reachable from
-    // untrusted `.bc` files.
+    // untrusted `.rbc` files.
     let string_span = |start: u32, len: u16| -> String {
         let start = start as usize;
         let end = start.saturating_add(len as usize);

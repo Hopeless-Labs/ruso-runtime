@@ -1,6 +1,6 @@
 # Runtime (`ruso-runtime`)
 
-The runtime executes `BytecodeProgram` without parsing `.ruso` source. Integrators embed `Executor` directly; the CLI is optional.
+The runtime executes `BytecodeProgram` without parsing `.rsl` source. Integrators embed `Executor` directly; the CLI is optional.
 
 ## Entry points
 
@@ -35,7 +35,7 @@ When a check matches, `finalize_finding()` builds one `Finding` from metadata pl
 | `name` | `name`, or `report` title if `name` omitted |
 | `description`, `impact`, `author` | Optional metadata strings |
 | `severity` | Metadata `severity`, default `info` |
-| `cve`, `cwe`, `references`, `cvss`, `cvss_score` | Repeatable DSL lines → `Vec<String>` |
+| `cve`, `cwe`, `references`, `cvss`, `cvss_score` | Repeatable RSL lines → `Vec<String>` |
 | `mitigation` | Single free-text line → `Option<String>` (declaring it twice is a compile error) |
 | `evidence` | `evidence <probe>.body` or `evidence <probe> regex '…'` on that probe only |
 
@@ -201,10 +201,10 @@ At end of `run_bytecode`: `close_sessions()` drops open sockets, then `finalize_
 ## Testing runtime changes
 
 1. Unit tests in `runtime/*` modules (`#[cfg(test)]`).  
-2. Compile a `.ruso` script and `Executor::from_bytecode` + manual run.  
+2. Compile a `.rsl` script and `Executor::from_bytecode` + manual run.  
 3. `format_human` / round-trip `encode` → `decode` for bytecode changes.
 
-Any change to the wire layout bumps `VERSION`, so a mismatched `.bc` is rejected with a clear `BadVersion` error rather than a cryptic decode failure (see [BYTECODE.md](BYTECODE.md) for the policy). Recompile stored `.bc` files after a bump.
+Any change to the wire layout bumps `VERSION`, so a mismatched `.rbc` is rejected with a clear `BadVersion` error rather than a cryptic decode failure (see [BYTECODE.md](BYTECODE.md) for the policy). Recompile stored `.rbc` files after a bump.
 
 ## IPv6 sockets
 

@@ -15,7 +15,7 @@ Full developer docs are in **[`docs/`](docs/README.md)**:
 | [Runtime](docs/RUNTIME.md) | Executor, HTTP/DNS/TCP/UDP, TLS, sessions |
 | [Extending](docs/EXTENDING.md) | Adding options, opcodes, matchers |
 
-Related repos: [ruso-script](https://github.com/Hopeless-Labs/ruso-script) (DSL + compiler), [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) (`ruso` binary).
+Related repos: [ruso-script](https://github.com/Hopeless-Labs/ruso-script) (RSL + compiler), [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) (`ruso` binary).
 
 ## Usage
 
@@ -31,7 +31,7 @@ let program = decode_bytecode(&bytes)?;
 let result = Executor::from_bytecode(config, program)?.run().await?;
 ```
 
-Compile `.ruso` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ruso-script)**; this crate does not parse source files.
+Compile `.rsl` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ruso-script)**; this crate does not parse source files.
 
 ## Key types
 

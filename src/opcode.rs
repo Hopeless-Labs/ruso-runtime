@@ -61,7 +61,7 @@ pub const OP_STOP: u8 = 14;
 pub const OP_FAIL: u8 = 15;
 pub const OP_CONTINUE: u8 = 16;
 pub const OP_EXIT: u8 = 17;
-// 18 reserved: was `Repeat`, removed from the DSL and VM.
+// 18 reserved: was `Repeat`, removed from the language and VM.
 pub const OP_LOOP_BACK: u8 = 19;
 pub const OP_BREAK: u8 = 20;
 pub const OP_SET_LIST: u8 = 21;

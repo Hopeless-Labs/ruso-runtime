@@ -29,7 +29,7 @@ Documentation for the **ruso-runtime** crate: bytecode VM, wire format, and netw
 
 | Topic | Repository |
 |-------|------------|
-| `.ruso` DSL syntax | [ruso-script](https://github.com/Hopeless-Labs/ruso-script) — `docs/DSL_REFERENCE.md` |
+| `.rsl` RSL syntax | [ruso-script](https://github.com/Hopeless-Labs/ruso-script) — `docs/RSL_REFERENCE.md` |
 | Compiler pipeline | [ruso-script](https://github.com/Hopeless-Labs/ruso-script) — `docs/COMPILER.md` |
 | Example checks | [ruso-script](https://github.com/Hopeless-Labs/ruso-script) — `examples/`, `docs/EXAMPLES.md` |
 | `ruso` CLI | [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) — `docs/CLI.md` |

@@ -1,13 +1,13 @@
 # Architecture
 
-Ruso splits **language** (script + compiler) from **execution** (runtime VM). The CLI is a thin driver. This keeps the bytecode contract stable while the DSL evolves.
+Ruso splits **language** (script + compiler) from **execution** (runtime VM). The CLI is a thin driver. This keeps the bytecode contract stable while RSL evolves.
 
 ## End-to-end flow
 
 ```mermaid
 flowchart LR
   subgraph script_crate [ruso-script]
-    SRC[".ruso source"]
+    SRC[".rsl source"]
     PEST[Pest parser]
     AST[AST]
     SPEC[ProgramSpec]
@@ -48,7 +48,7 @@ There is a single network opcode:
 Send { probe_id, optional_payload_override }
 ```
 
-`ProbeKind` in the probe table distinguishes HTTP vs DNS vs TCP vs UDP. Adding a Redis check does **not** add `OP_REDIS`; it adds a `tcp` probe with a RESP payload in a `.ruso` file.
+`ProbeKind` in the probe table distinguishes HTTP vs DNS vs TCP vs UDP. Adding a Redis check does **not** add `OP_REDIS`; it adds a `tcp` probe with a RESP payload in a `.rsl` file.
 
 Benefits:
 
@@ -63,7 +63,7 @@ Trade-off: very complex protocol state machines still need either richer generic
 ### `ruso-runtime`
 
 - **Public API**: `Executor`, `ExecutorConfig`, `BytecodeProgram`, `encode_bytecode` / `decode_bytecode`, `ProgramSpec`, `SocketProbeSpec`, `RuntimeError`, `build_client`, contract types.
-- **Does not parse** `.ruso` source.
+- **Does not parse** `.rsl` source.
 - Owns all network I/O (reqwest, tokio sockets, tokio-rustls). `build_client`
   is exported so a frontend can build a preflight/probe client with the same
   TLS/proxy/redirect behaviour as the executor instead of hand-rolling one.
@@ -96,7 +96,7 @@ Pipeline: `parse` → `build_program_spec` → `compile`.
 
 - Clap CLI: `scan`, `parse`, `compile`, `exec`.
 - Wires `ExecutorConfig` (base URL, timeout, TLS verify, proxy) from flags.
-- Discovers `.ruso` files and target lists for batch scans.
+- Discovers `.rsl` files and target lists for batch scans.
 
 ## Repositories (not a monorepo)
 
@@ -105,7 +105,7 @@ Ruso ships as **three independent Git repositories** under [Hopeless-Labs](https
 | Repository | Role |
 |------------|------|
 | [ruso-runtime](https://github.com/Hopeless-Labs/ruso-runtime) | VM, bytecode wire format, network I/O (this repo) |
-| [ruso-script](https://github.com/Hopeless-Labs/ruso-script) | Pest grammar, compiler, `examples/*.ruso` |
+| [ruso-script](https://github.com/Hopeless-Labs/ruso-script) | Pest grammar, compiler, `examples/*.rsl` |
 | [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) | `ruso` binary |
 
 A local parent folder (e.g. `Hopeless-Labs/` with sibling clones) is only for convenience on your machine. **It is not a git repository** and does not contain canonical documentation.
@@ -132,7 +132,7 @@ ruso-runtime/
 
 Related documentation in other repos:
 
-- DSL syntax — [ruso-script `docs/DSL_REFERENCE.md`](https://github.com/Hopeless-Labs/ruso-script/blob/main/docs/DSL_REFERENCE.md)
+- RSL syntax — [ruso-script `docs/RSL_REFERENCE.md`](https://github.com/Hopeless-Labs/ruso-script/blob/main/docs/RSL_REFERENCE.md)
 - Example scripts — [ruso-script `docs/EXAMPLES.md`](https://github.com/Hopeless-Labs/ruso-script/blob/main/docs/EXAMPLES.md)
 - CLI — [ruso-cli `docs/CLI.md`](https://github.com/Hopeless-Labs/ruso-cli/blob/main/docs/CLI.md)
 
@@ -186,7 +186,7 @@ Flow instructions: `stop` (halt, no finding), `exit` (halt, finalize finding), `
 ## What Ruso is not (yet)
 
 - Not a scan orchestration platform (scheduling, workers, asset DB).
-- Not a plugin marketplace (checks are `.ruso` files you ship).
+- Not a plugin marketplace (checks are `.rsl` files you ship).
 - Not a full web crawler / Burp replacement.
 
 It **is** a solid **check execution engine** with a small, generic bytecode ISA.
