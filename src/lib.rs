@@ -5,10 +5,10 @@
 //!
 //! # Developer documentation
 //!
-//! - [Architecture](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/ARCHITECTURE.md)
-//! - [Bytecode v1](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/BYTECODE.md)
-//! - [Runtime](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/RUNTIME.md)
-//! - [Extending](https://github.com/Hopeless-Labs/ruso-runtime/blob/main/docs/EXTENDING.md)
+//! - [Architecture](https://docs.ruso.hopeless-labs.com/internals/architecture.html)
+//! - [Bytecode v1](https://docs.ruso.hopeless-labs.com/internals/bytecode.html)
+//! - [Runtime](https://docs.ruso.hopeless-labs.com/internals/runtime.html)
+//! - [Extending](https://docs.ruso.hopeless-labs.com/internals/extending.html)
 
 // `ProbeKind::Http` is the dominant variant by a wide margin (HTTP spec carries
 // headers, cookies, queries, bodies). Boxing it would force an indirection on

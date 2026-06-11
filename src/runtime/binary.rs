@@ -4,7 +4,8 @@
 //! only that exact value, rejecting anything else up front with `BadVersion`
 //! (never a cryptic mid-decode `Corrupt`). Any change to the wire format must
 //! bump `VERSION` — a coordinated step, since the registry has to deploy the
-//! new runtime and serve re-compiled bytecode. See `docs/BYTECODE.md`.
+//! new runtime and serve re-compiled bytecode. See the Bytecode chapter at
+//! <https://docs.ruso.hopeless-labs.com/internals/bytecode.html>.
 //!
 //! The current v1 layout encodes `CmpValue::Number` as `u64` (earlier revisions
 //! silently truncated to `u32`), assigns HTTP method tags 5 and 6 to `Head` and

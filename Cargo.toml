@@ -4,6 +4,7 @@ version = "0.1.0-beta.1"
 edition = "2024"
 description = "Ruso bytecode VM and execution runtime"
 license = "Apache-2.0"
+documentation = "https://docs.ruso.hopeless-labs.com"
 
 [lib]
 name = "ruso_runtime"

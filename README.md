@@ -1,21 +1,14 @@
 # ruso-runtime
 
-> **Development status:** This project is under active development. APIs, bytecode format, and runtime behavior may change without notice. Not recommended for production use yet.
+> **Development status:** under active development. APIs, bytecode format, and
+> runtime behavior may change without notice. Not recommended for production use yet.
 
-Bytecode VM and network runtime for Ruso vulnerability checks.
+Bytecode VM and network runtime for Ruso vulnerability checks — executes compiled
+`.rbc` programs against HTTP, DNS, TCP, and UDP targets. Part of the
+[Ruso](https://github.com/Hopeless-Labs) vulnerability-scanning ecosystem.
 
-## Documentation
-
-Full developer docs are in **[`docs/`](docs/README.md)**:
-
-| Doc | Topic |
-|-----|--------|
-| [Architecture](docs/ARCHITECTURE.md) | System design, probe table, three repos |
-| [Bytecode v1](docs/BYTECODE.md) | Wire format, pools, opcodes |
-| [Runtime](docs/RUNTIME.md) | Executor, HTTP/DNS/TCP/UDP, TLS, sessions |
-| [Extending](docs/EXTENDING.md) | Adding options, opcodes, matchers |
-
-Related repos: [ruso-script](https://github.com/Hopeless-Labs/ruso-script) (RSL + compiler), [ruso-cli](https://github.com/Hopeless-Labs/ruso-cli) (`ruso` binary).
+📖 **Full documentation:** <https://docs.ruso.hopeless-labs.com>
+(architecture, bytecode format, runtime internals, extending).
 
 ## Usage
 
@@ -31,23 +24,22 @@ let program = decode_bytecode(&bytes)?;
 let result = Executor::from_bytecode(config, program)?.run().await?;
 ```
 
-Compile `.rsl` scripts with **[ruso-script](https://github.com/Hopeless-Labs/ruso-script)**; this crate does not parse source files.
+This crate executes bytecode; it does not parse source. Compile `.rsl` with
+**[ruso-script](https://github.com/Hopeless-Labs/ruso-script)**.
 
-## Key types
+Dependency:
 
-| Type | Role |
-|------|------|
-| `BytecodeProgram` | Probes + instructions + pools |
-| `Instr` | VM opcodes (`Send`, `Match`, `ForList`, …) |
-| `ProgramSpec` | Probe table + check metadata (cve, cwe, references, cvss, mitigation, …) |
-| `Finding` | Single positive result: metadata + evidence |
-| `SocketProbeSpec` | Generic dns/tcp/udp options |
-| `Executor` | Async execution |
+```toml
+ruso-runtime = { git = "https://github.com/Hopeless-Labs/ruso-runtime.git", branch = "main" }
+```
 
 ## Bytecode
 
 - Magic: `b"RUSO"`
 - Version: **`1`** (`ruso_runtime::VERSION`)
+
+The wire format, opcodes, and execution model are documented in
+**[The Ruso Book](https://docs.ruso.hopeless-labs.com)**.
 
 ## License
 
