@@ -3,6 +3,10 @@ use thiserror::Error;
 use crate::contract::QualifiedMatch;
 use crate::runtime::binary::BytecodeError;
 
+/// An error that aborts execution. Most variants carry a message; the
+/// `#[from]` variants wrap lower-level errors (bytecode decode, HTTP, I/O,
+/// regex). A failed `match` does not produce one of these — only `assert`,
+/// `fail`, and genuine transport/decoding failures do.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("bytecode: {0}")]

@@ -28,8 +28,13 @@ use crate::runtime::socket::{
 use crate::runtime::spec::ProbeKind;
 use crate::runtime::spec::SocketProbeSpec;
 
+/// Runtime configuration for an [`Executor`]: the target base URL plus the
+/// network, TLS, and safety knobs. Use [`ExecutorConfig::default`] and override
+/// the fields you care about.
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
+    /// Base URL HTTP probe `path`s are joined onto, and the source of the
+    /// `scan_host` / `scan_port` / `scan_url` variables (the CLI `--target`).
     pub base_url: String,
     /// Connect timeout for HTTP requests and TCP/UDP/DNS probes.
     pub default_timeout: Duration,
@@ -40,12 +45,14 @@ pub struct ExecutorConfig {
     /// truncated at this boundary to bound memory use against malicious
     /// or misconfigured targets.
     pub max_response_bytes: usize,
+    /// Follow HTTP redirects (per-probe `follow_redirect` overrides this).
     pub follow_redirect: bool,
     /// Verify TLS server certificates. Default is `true`; set to `false`
     /// (CLI `--insecure`) only for explicitly trusted scan environments —
     /// otherwise the scanner is exposed to MITM that can plant findings
     /// or read in-flight credentials.
     pub verify_ssl: bool,
+    /// Optional proxy URL for HTTP probes (e.g. `http://127.0.0.1:8080`).
     pub proxy: Option<String>,
     /// Wall-clock budget for a single script execution. `None` disables.
     /// Defaults to 5 minutes so a hostile/buggy bytecode (deep loops, long
@@ -74,6 +81,10 @@ impl Default for ExecutorConfig {
     }
 }
 
+/// Executes a compiled program against a target. Construct one with
+/// [`from_bytes`](Executor::from_bytes), [`from_bytecode`](Executor::from_bytecode),
+/// or [`from_program`](Executor::from_program), then call
+/// [`run`](Executor::run).
 pub struct Executor {
     config: ExecutorConfig,
     /// Program shared via `Arc` so the same compiled script can run against
@@ -93,27 +104,40 @@ pub struct Executor {
     compiled_extract_regex: Arc<[Option<Regex>]>,
 }
 
+/// The outcome of one [`Executor::run`]: whether a finding was produced, plus
+/// the report, port-check details, and final variable state.
 #[derive(Debug, Clone)]
 pub struct ExecutionResult {
+    /// The script ran to completion without an aborting error.
     pub success: bool,
     /// True when `finalize_finding()` produced a finding (metadata + matchers passed).
     pub detected: bool,
     /// Check did not run because a required socket port was closed (see `skip_reason`).
     pub skipped: bool,
+    /// Human-readable reason the check was skipped, if `skipped`.
     pub skip_reason: Option<String>,
     /// Port probes performed before execution (empty for HTTP-only checks).
     pub port_checks: Vec<PortCheck>,
+    /// The findings report (empty unless `detected`).
     pub report: Report,
+    /// Final value of every variable set during the run.
     pub variables: HashMap<String, VariableValue>,
+    /// The check's metadata, echoed for convenience.
     pub metadata: crate::runtime::spec::CheckMetadata,
 }
 
 impl Executor {
+    /// Decode a raw `.rbc` byte buffer and build an executor from it.
+    /// Fails with [`RuntimeError::Bytecode`] if the bytes are not a valid
+    /// program for this runtime version.
     pub fn from_bytes(config: ExecutorConfig, bytes: &[u8]) -> Result<Self, RuntimeError> {
         let program = binary::decode(bytes).map_err(RuntimeError::Bytecode)?;
         Self::from_bytecode(config, program)
     }
 
+    /// Build an executor from an already-decoded [`BytecodeProgram`]. Prefer
+    /// [`from_program`](Executor::from_program) when running one program
+    /// against many targets.
     pub fn from_bytecode(
         config: ExecutorConfig,
         program: BytecodeProgram,
@@ -177,6 +201,10 @@ impl Executor {
         &self.program
     }
 
+    /// Execute the program against the configured target and return the
+    /// [`ExecutionResult`]. Probes that must reach a closed port short-circuit
+    /// to a `skipped` result; an `assert`/`fail` or transport error returns
+    /// `Err`.
     pub async fn run(&self) -> Result<ExecutionResult, RuntimeError> {
         self.run_bytecode().await
     }

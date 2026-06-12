@@ -1,19 +1,34 @@
 use crate::contract::Severity;
 use crate::runtime::spec::CheckMetadata;
 
+/// A single positive result: the check's metadata resolved into a concrete
+/// finding, plus the evidence captured during the run. Built from
+/// [`CheckMetadata`] via [`Finding::from_metadata`].
 #[derive(Debug, Clone)]
 pub struct Finding {
+    /// Finding title (from metadata `name`, falling back to `report_title`).
     pub name: String,
+    /// What the check found.
     pub description: Option<String>,
+    /// The risk this finding represents.
     pub impact: Option<String>,
+    /// Severity (defaults to `Info` when the check set none).
     pub severity: Severity,
+    /// Check author.
     pub author: Option<String>,
+    /// Associated CVE identifiers.
     pub cve: Vec<String>,
+    /// Associated CWE identifiers.
     pub cwe: Vec<String>,
+    /// Reference URLs.
     pub references: Vec<String>,
+    /// CVSS vector strings.
     pub cvss: Vec<String>,
+    /// CVSS numeric scores.
     pub cvss_score: Vec<String>,
+    /// Remediation guidance.
     pub mitigation: Option<String>,
+    /// Proof strings captured by `evidence` rules.
     pub evidence: Vec<String>,
 }
 
@@ -41,8 +56,11 @@ impl Finding {
     }
 }
 
+/// A run's findings. At most one finding is produced per script execution, so
+/// this holds zero or one entry.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
+    /// The findings emitted (zero or one).
     pub findings: Vec<Finding>,
 }
 
