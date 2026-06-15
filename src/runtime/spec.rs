@@ -104,6 +104,13 @@ pub struct CheckMetadata {
     pub severity: Option<crate::contract::Severity>,
     /// Check author.
     pub author: Option<String>,
+    /// RESERVED / DEAD — the RSL `report` field was removed from the language,
+    /// so nothing ever sets this (always `None`). It is kept ONLY as a bytecode
+    /// wire-format slot for backward compatibility with already-published `.bc`
+    /// (removing it shifts every later field and corrupts old bytecode unless
+    /// `VERSION` is bumped + the registry redeployed + everything re-published).
+    /// Not a usable feature; do not write to it.
+    pub report_title: Option<String>,
     /// Associated CVE identifiers.
     pub cve: Vec<String>,
     /// Associated CWE identifiers.
