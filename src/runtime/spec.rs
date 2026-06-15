@@ -90,8 +90,8 @@ pub enum ProbeKind {
 
 /// The `metadata { … }` block of a check — describes the finding it emits.
 ///
-/// Only `name` (or `report_title`) is required to emit a finding; the rest
-/// enriches the report and is needed to publish to the registry.
+/// Only `name` is required to emit a finding; the rest enriches the report and
+/// is needed to publish to the registry.
 #[derive(Debug, Clone, Default)]
 pub struct CheckMetadata {
     /// Short finding title (the registry slug derives from this).
@@ -104,7 +104,12 @@ pub struct CheckMetadata {
     pub severity: Option<crate::contract::Severity>,
     /// Check author.
     pub author: Option<String>,
-    /// Optional longer report title overriding `name` in the report.
+    /// RESERVED / DEAD — the RSL `report` field was removed from the language,
+    /// so nothing ever sets this (always `None`). It is kept ONLY as a bytecode
+    /// wire-format slot for backward compatibility with already-published `.bc`
+    /// (removing it shifts every later field and corrupts old bytecode unless
+    /// `VERSION` is bumped + the registry redeployed + everything re-published).
+    /// Not a usable feature; do not write to it.
     pub report_title: Option<String>,
     /// Associated CVE identifiers.
     pub cve: Vec<String>,
