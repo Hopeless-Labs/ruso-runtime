@@ -6,7 +6,7 @@ use crate::runtime::spec::CheckMetadata;
 /// [`CheckMetadata`] via [`Finding::from_metadata`].
 #[derive(Debug, Clone)]
 pub struct Finding {
-    /// Finding title (from metadata `name`, falling back to `report_title`).
+    /// Finding title (from metadata `name`).
     pub name: String,
     /// What the check found.
     pub description: Option<String>,
@@ -35,10 +35,7 @@ pub struct Finding {
 impl Finding {
     /// Build the single finding for a script from its metadata block.
     pub fn from_metadata(metadata: &CheckMetadata, evidence: Vec<String>) -> Option<Self> {
-        let name = metadata
-            .name
-            .clone()
-            .or_else(|| metadata.report_title.clone())?;
+        let name = metadata.name.clone()?;
         Some(Self {
             name,
             description: metadata.description.clone(),
@@ -80,7 +77,7 @@ mod tests {
     use super::Finding;
 
     #[test]
-    fn from_metadata_requires_name_or_report_title() {
+    fn from_metadata_requires_name() {
         let meta = CheckMetadata {
             name: Some("Check".into()),
             description: Some("desc".into()),
@@ -94,13 +91,11 @@ mod tests {
     }
 
     #[test]
-    fn from_metadata_uses_report_title_fallback() {
+    fn from_metadata_without_name_is_none() {
         let meta = CheckMetadata {
-            report_title: Some("Legacy title".into()),
+            description: Some("desc".into()),
             ..Default::default()
         };
-        let finding = Finding::from_metadata(&meta, vec![]).expect("finding");
-        assert_eq!(finding.name, "Legacy title");
-        assert_eq!(finding.severity, Severity::Info);
+        assert!(Finding::from_metadata(&meta, vec![]).is_none());
     }
 }
