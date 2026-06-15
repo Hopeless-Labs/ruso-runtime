@@ -90,8 +90,8 @@ pub enum ProbeKind {
 
 /// The `metadata { … }` block of a check — describes the finding it emits.
 ///
-/// Only `name` is required to emit a finding; the rest enriches the report and
-/// is needed to publish to the registry.
+/// Only `name` (or `report_title`) is required to emit a finding; the rest
+/// enriches the report and is needed to publish to the registry.
 #[derive(Debug, Clone, Default)]
 pub struct CheckMetadata {
     /// Short finding title (the registry slug derives from this).
@@ -104,6 +104,8 @@ pub struct CheckMetadata {
     pub severity: Option<crate::contract::Severity>,
     /// Check author.
     pub author: Option<String>,
+    /// Optional longer report title overriding `name` in the report.
+    pub report_title: Option<String>,
     /// Associated CVE identifiers.
     pub cve: Vec<String>,
     /// Associated CWE identifiers.

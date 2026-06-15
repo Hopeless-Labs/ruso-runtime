@@ -443,6 +443,7 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
         None => w.u8(0),
     }
     w.opt_str(&metadata.author);
+    w.opt_str(&metadata.report_title);
     write_strings(w, &metadata.cve);
     write_strings(w, &metadata.cwe);
     write_strings(w, &metadata.references);
@@ -453,10 +454,7 @@ fn write_metadata(w: &mut Writer, metadata: &CheckMetadata) {
     w.opt_str(&metadata.version);
     // `family` is the last field of the v1 metadata block. It (and `tags` /
     // `version` before it) was appended during early `0.1.0-dev` without a
-    // VERSION bump; `report_title` was likewise *removed* (between `author` and
-    // `cve`) during beta without a bump, as a coordinated break — the registry
-    // is redeployed and all scripts re-published, so no older `.bc` survives to
-    // be misread. Outside such a coordinated reset, bump VERSION instead.
+    // VERSION bump; any further wire-format change now bumps VERSION instead.
     w.opt_str(&metadata.family);
 }
 
@@ -471,6 +469,7 @@ fn read_metadata(r: &mut Reader<'_>) -> Result<CheckMetadata, BytecodeError> {
             Some(read_severity(r)?)
         },
         author: r.opt_str()?,
+        report_title: r.opt_str()?,
         cve: read_strings(r)?,
         cwe: read_strings(r)?,
         references: read_strings(r)?,
@@ -1440,6 +1439,7 @@ mod tests {
             impact: None,
             severity: Some(Severity::High),
             author: None,
+            report_title: None,
             cve: vec!["CVE-2024-1".into()],
             cwe: vec!["CWE-79".into()],
             references: vec!["https://example.com".into()],

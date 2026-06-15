@@ -81,6 +81,9 @@ fn format_metadata(out: &mut String, metadata: &crate::runtime::spec::CheckMetad
     if let Some(author) = &metadata.author {
         writeln!(out, ";;   author: {author:?}").ok();
     }
+    if let Some(title) = &metadata.report_title {
+        writeln!(out, ";;   report: {title:?}").ok();
+    }
     for cve in &metadata.cve {
         writeln!(out, ";;   cve: {cve:?}").ok();
     }
