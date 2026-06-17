@@ -1018,30 +1018,44 @@ fn read_evidence(r: &mut Reader<'_>) -> Result<Vec<EvidenceKind>, BytecodeError>
 
 fn write_evidence_kind(w: &mut Writer, k: &EvidenceKind) {
     match k {
-        EvidenceKind::BodyRef(target) => {
+        EvidenceKind::Body { target, pattern } => {
             w.u8(0);
             w.str(target);
+            w.opt_str(pattern);
         }
-        EvidenceKind::ResponseRef(target) => {
-            w.u8(2);
-            w.str(target);
-        }
-        EvidenceKind::Regex { target, pattern } => {
+        EvidenceKind::Response { target, pattern } => {
             w.u8(1);
             w.str(target);
-            w.str(pattern);
+            w.opt_str(pattern);
+        }
+        EvidenceKind::Header {
+            target,
+            name,
+            pattern,
+        } => {
+            w.u8(2);
+            w.str(target);
+            w.str(name);
+            w.opt_str(pattern);
         }
     }
 }
 
 fn read_evidence_kind(r: &mut Reader<'_>) -> Result<EvidenceKind, BytecodeError> {
     Ok(match r.u8()? {
-        0 => EvidenceKind::BodyRef(r.str()?),
-        1 => EvidenceKind::Regex {
+        0 => EvidenceKind::Body {
             target: r.str()?,
-            pattern: r.str()?,
+            pattern: r.opt_str()?,
         },
-        2 => EvidenceKind::ResponseRef(r.str()?),
+        1 => EvidenceKind::Response {
+            target: r.str()?,
+            pattern: r.opt_str()?,
+        },
+        2 => EvidenceKind::Header {
+            target: r.str()?,
+            name: r.str()?,
+            pattern: r.opt_str()?,
+        },
         _ => return Err(BytecodeError::Corrupt("evidence")),
     })
 }

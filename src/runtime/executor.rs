@@ -96,7 +96,7 @@ pub struct Executor {
     /// once at executor construction so per-run / per-loop-iteration matcher
     /// dispatch never pays the regex compile cost again.
     compiled_matcher_regex: Arc<[CompiledMatcherRegex]>,
-    /// Pre-compiled regexes for `EvidenceKind::Regex`, aligned with
+    /// Pre-compiled regexes for evidence rules that carry a regex, aligned with
     /// `program.evidence`. `None` for non-regex evidence kinds.
     compiled_evidence_regex: Arc<[Option<Regex>]>,
     /// Pre-compiled regexes for `ExtractSource::Body { regex: Some(...) }`,
@@ -170,8 +170,12 @@ impl Executor {
             .evidence
             .iter()
             .map(|kind| match kind {
-                EvidenceKind::Regex { pattern, .. } => Regex::new(pattern).map(Some),
-                _ => Ok(None),
+                EvidenceKind::Body { pattern, .. }
+                | EvidenceKind::Response { pattern, .. }
+                | EvidenceKind::Header { pattern, .. } => match pattern {
+                    Some(p) => Regex::new(p).map(Some),
+                    None => Ok(None),
+                },
             })
             .collect::<Result<Vec<_>, regex::Error>>()?
             .into();
@@ -936,37 +940,72 @@ impl Executor {
         kind_idx: usize,
         context: &Context,
     ) -> Result<String, RuntimeError> {
-        match kind {
-            EvidenceKind::BodyRef(target) => {
+        // Resolve the explicit source to its raw string, plus the optional
+        // regex and a label for error messages.
+        let (raw, pattern, label, target): (String, &Option<String>, String, &str) = match kind {
+            EvidenceKind::Body { target, pattern } => {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let http = response.as_http().map_err(|_| RuntimeError::Other(format!(
-                    "evidence {target}.body requires an http probe; use evidence {target}.response or evidence {target} regex for socket/dns"
-                )))?;
-                Ok(crate::util::truncate_str(&http.body, 500))
+                let http = response.as_http().map_err(|_| {
+                    RuntimeError::Other(format!(
+                        "evidence {target}.body requires an http probe; use {target}.response for socket/dns"
+                    ))
+                })?;
+                (http.body.clone(), pattern, format!("{target}.body"), target)
             }
-            EvidenceKind::ResponseRef(target) => {
+            EvidenceKind::Response { target, pattern } => {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                Ok(crate::util::truncate_str(&evidence_haystack(response), 500))
+                (
+                    evidence_haystack(response),
+                    pattern,
+                    format!("{target}.response"),
+                    target,
+                )
             }
-            EvidenceKind::Regex { target, pattern } => {
+            EvidenceKind::Header {
+                target,
+                name,
+                pattern,
+            } => {
                 let response = context
                     .response(target)
                     .ok_or_else(|| RuntimeError::UnknownTarget(target.clone()))?;
-                let haystack = evidence_haystack(response);
+                let http = response.as_http().map_err(|_| {
+                    RuntimeError::Other(format!("evidence {target}.header requires an http probe"))
+                })?;
+                let value = http
+                    .headers
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value.clone())
+                    .ok_or_else(|| {
+                        RuntimeError::Other(format!(
+                            "evidence header `{name}` on {target} not present"
+                        ))
+                    })?;
+                (
+                    value,
+                    pattern,
+                    format!("{target}.header \"{name}\""),
+                    target,
+                )
+            }
+        };
+        let _ = target;
+        match pattern {
+            None => Ok(crate::util::truncate_str(&raw, 500)),
+            Some(p) => {
                 let compiled =
                     self.compiled_evidence_regex[kind_idx]
                         .as_ref()
                         .ok_or_else(|| {
                             RuntimeError::Other("evidence regex missing pre-compiled entry".into())
                         })?;
-                extract_with_compiled(&haystack, compiled).map_err(|_| {
-                    RuntimeError::Other(format!(
-                        "evidence regex on {target} did not match: {pattern}"
-                    ))
+                extract_with_compiled(&raw, compiled).map_err(|_| {
+                    RuntimeError::Other(format!("evidence regex on {label} did not match: {p}"))
                 })
             }
         }

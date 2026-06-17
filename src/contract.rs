@@ -168,20 +168,35 @@ pub enum ExtractSource {
     },
 }
 
-/// A proof string attached to a finding.
+/// A proof string attached to a finding. Every rule names an explicit source
+/// (`.body`, `.response`, or `.header "<name>"`); an optional `regex` extracts
+/// capture group 1 (or the whole match) from that source instead of taking it
+/// whole.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvidenceKind {
-    /// HTTP probe response body (truncated).
-    BodyRef(String),
-    /// Probe response text: HTTP body, DNS answers, or socket data (truncated).
-    ResponseRef(String),
-    /// A regex run against one probe's response; capture group 1 (or the
-    /// whole match) becomes the evidence string.
-    Regex {
+    /// HTTP probe response body (`p.body` / `p.body regex '…'`).
+    Body {
         /// Probe name.
         target: String,
-        /// Rust-syntax regular expression.
-        pattern: String,
+        /// Optional regex; `None` takes the whole (truncated) body.
+        pattern: Option<String>,
+    },
+    /// Probe response payload — HTTP body, DNS answers, or socket data
+    /// (`p.response` / `p.response regex '…'`).
+    Response {
+        /// Probe name.
+        target: String,
+        /// Optional regex; `None` takes the whole (truncated) payload.
+        pattern: Option<String>,
+    },
+    /// A named HTTP response header value (`p.header "X" ` / `p.header "X" regex '…'`).
+    Header {
+        /// Probe name.
+        target: String,
+        /// Header name (case-insensitive).
+        name: String,
+        /// Optional regex; `None` takes the whole header value.
+        pattern: Option<String>,
     },
 }
 

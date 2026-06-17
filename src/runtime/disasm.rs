@@ -221,10 +221,18 @@ fn format_extract(source: &ExtractSource) -> String {
 }
 
 fn format_evidence(kind: &EvidenceKind) -> String {
+    let re = |p: &Option<String>| match p {
+        Some(pat) => format!(" regex {pat:?}"),
+        None => String::new(),
+    };
     match kind {
-        EvidenceKind::BodyRef(target) => format!("body {target}"),
-        EvidenceKind::ResponseRef(target) => format!("response {target}"),
-        EvidenceKind::Regex { target, pattern } => format!("regex {target} {pattern:?}"),
+        EvidenceKind::Body { target, pattern } => format!("{target}.body{}", re(pattern)),
+        EvidenceKind::Response { target, pattern } => format!("{target}.response{}", re(pattern)),
+        EvidenceKind::Header {
+            target,
+            name,
+            pattern,
+        } => format!("{target}.header {name:?}{}", re(pattern)),
     }
 }
 
